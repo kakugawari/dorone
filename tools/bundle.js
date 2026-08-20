@@ -16,7 +16,7 @@ const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
 
 let html = read('index.html');
 const css = read('styles.css');
-const js = ['core.js', 'tasks.js', 'app.js'].map(read).join('\n');
+const js = ['core.js', 'sound.js', 'tasks.js', 'app.js'].map(read).join('\n');
 
 // アイコンは data URI にする。1 枚で完結させるため。
 const svg = read('icon.svg');
@@ -25,7 +25,7 @@ const pngURI = 'data:image/png;base64,' + fs.readFileSync(path.join(ROOT, 'apple
 
 html = html
   .replace('<link rel="stylesheet" href="./styles.css">', '<style>\n' + css + '\n</style>')
-  .replace(/<script src="\.\/(core|tasks)\.js"><\/script>\s*/g, '')
+  .replace(/<script src="\.\/(core|sound|tasks)\.js"><\/script>\s*/g, '')
   .replace('<script src="./app.js"></script>', '<script>\n' + js + '\n</script>')
   .replace('href="./icon.svg"', 'href="' + svgURI + '"')
   .replace('href="./apple-touch-icon.png"', 'href="' + pngURI + '"')

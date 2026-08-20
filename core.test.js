@@ -446,3 +446,271 @@ test('上限をかけても、デッドゾーンの中では動かない (動い
   C.updateCamera(cam, { x: 0.15, y: 1.5, z: 3 }, 0.5, { deadYaw: 10, deadPitch: 8, maxYaw: 30 * C.DEG, maxPitch: 25 * C.DEG });
   assert.strictEqual(cam.yaw, before);
 });
+
+// ---------------------------------------------------------------- 電池
+
+test('飛んでいる間だけ電池が減る。地上では減らない', () => {
+  const e = env();
+  const s = C.createState({ start: { x: 0, y: 0, z: 2 } });
+  fly(s, stick(), 5, e);
+  assert.strictEqual(s.battery, 1, '地上で減った');
+  fly(s, stick({ throttle: 0.4 }), 5, e);
+  assert.ok(s.battery < 1, '飛んでも減っていない');
+});
+
+test('ホバリングなら 7 分ほどもつ', () => {
+  const e = env();
+  const s = C.createState({ start: { x: 0, y: 0, z: 2 } });
+  fly(s, stick({ throttle: 0.5 }), 1.5, e);
+  const b0 = s.battery, t0 = s.t;
+  fly(s, stick(), 60, e);
+  const perSec = (b0 - s.battery) / (s.t - t0);
+  const total = 1 / perSec;
+  assert.ok(total > 380 && total < 560, 'ホバリングで ' + total.toFixed(0) + ' 秒しかもたない');
+});
+
+test('派手に飛ばすほど電池が早く減る', () => {
+  const cfg = C.makeConfig();
+  const level = { pitch: 0, roll: 0 };
+  const tilted = { pitch: cfg.maxTiltDeg * C.DEG, roll: 0 };
+  const calm = C.batteryLoad({ throttle: 0 }, level, cfg);
+  const climbing = C.batteryLoad({ throttle: 1 }, level, cfg);
+  const wild = C.batteryLoad({ throttle: 1 }, tilted, cfg);
+  assert.ok(climbing > calm * 1.3, '上げても変わらない ' + calm.toFixed(2) + ' -> ' + climbing.toFixed(2));
+  assert.ok(wild > climbing, '傾けても変わらない');
+
+  // 実際に飛ばしても、そのぶん早く減る (壁に当たらない短い時間で見る)
+  function used(input) {
+    const e = env();
+    const s = C.createState({ start: { x: 0, y: 1.0, z: 1.5 } });
+    s.flying = true;
+    fly(s, input, 2.5, e);
+    assert.ok(!s.crashed, s.crashReason);
+    return 1 - s.battery;
+  }
+  assert.ok(used(stick({ throttle: 0.8 })) > used(stick()) * 1.2, '飛ばし方で差が出ない');
+});
+
+test('電池が尽きると、操作にかかわらず勝手に降りて着地する', () => {
+  const e = env();
+  const s = C.createState({ start: { x: 0, y: 1.5, z: 2 }, battery: 0.06 });
+  s.flying = true;
+  fly(s, stick({ throttle: 1 }), 12, e);   // 上げ続けても止められない
+  assert.ok(!s.flying, 'まだ飛んでいる (高度 ' + s.pos.y.toFixed(2) + ')');
+  assert.ok(!s.crashed, '墜落してはいけない: ' + s.crashReason);
+});
+
+test('電池を切れば減らない', () => {
+  const e = env({ config: { battery: false } });
+  const s = C.createState({ start: { x: 0, y: 1.2, z: 2 } });
+  s.flying = true;
+  fly(s, stick({ throttle: 1 }), 30, e);
+  assert.strictEqual(s.battery, 1);
+});
+
+// ---------------------------------------------------------------- 平たい機体の当たり判定
+
+test('テーブルの下をくぐれる (球ではなく平たい円柱として当たる)', () => {
+  const e = env();
+  const top = e.room.furniture.find(f => f.name === 'テーブルの天板');
+  const s = C.createState({ start: { x: 0.375, y: 0.20, z: 1.2 } });
+  s.flying = true;
+  fly(s, stick({ pitch: 0.25 }), 7, e);
+  assert.ok(!s.crashed, '当たった: ' + s.crashReason);
+  assert.ok(s.pos.z > top.max.z, 'くぐり抜けられていない (z=' + s.pos.z.toFixed(2) + ')');
+  assert.ok(s.pos.y < top.min.y, '上を越えてしまった');
+});
+
+test('天板の高さで突っこめば当たる', () => {
+  const e = env();
+  const s = C.createState({ start: { x: 0.375, y: 0.38, z: 1.2 } });
+  s.flying = true;
+  fly(s, stick({ pitch: 1 }), 4, e);
+  assert.ok(s.crashed && /天板/.test(s.crashReason), s.crashReason || '当たらなかった');
+});
+
+test('テーブルの脚には当たる', () => {
+  const e = env();
+  const s = C.createState({ start: { x: -0.25, y: 0.20, z: 1.2 } });
+  s.flying = true;
+  fly(s, stick({ pitch: 1 }), 4, e);
+  assert.ok(s.crashed && /脚/.test(s.crashReason), s.crashReason || '脚をすり抜けた');
+});
+
+// ---------------------------------------------------------------- 吊り荷物
+
+function payloadEnv() {
+  const e = env();
+  return e;
+}
+
+test('荷物の真上まで下りると、自動でひっかかる', () => {
+  const e = payloadEnv();
+  const s = C.createState({ start: { x: -1.4, y: 0, z: 1.0 } });
+  s.payload = C.createPayload(-1.4, 1.5);
+  s.auto = 'takeoff';
+  fly(s, stick(), 4, e);
+  assert.ok(!s.payload.attached, 'まだ拾ってはいけない (1.1m の高さ)');
+  // 荷物の上まで行って下りる
+  for (let i = 0; i < 60 * 12; i++) {
+    const dz = 1.5 - s.pos.z, dx = -1.4 - s.pos.x;
+    C.step(s, stick({
+      throttle: C.clamp((0.45 - s.pos.y) * 1.6 - s.vel.y * 0.5, -1, 1),
+      pitch: C.clamp(dz * 0.9 - s.vel.z * 1.5, -1, 1),
+      roll: C.clamp(dx * 0.9 - s.vel.x * 1.5, -1, 1)
+    }), DT, e);
+    if (s.payload.attached) break;
+  }
+  assert.ok(s.payload.attached, '拾えなかった');
+});
+
+test('吊った荷物は振り子として揺れ、機体を引っぱり返す', () => {
+  const e = payloadEnv();
+  const s = C.createState({ start: { x: 0, y: 1.2, z: 1.0 } });
+  s.flying = true;
+  s.payload = C.createPayload(0, 1.0);
+  s.payload.attached = true;
+  // 急に前へ。振れの「いちばん大きかったところ」を見る (1 秒後には戻りかけている)
+  let swing = 0;
+  for (let i = 0; i < 90; i++) {
+    C.step(s, stick({ pitch: 1 }), DT, e);
+    swing = Math.max(swing, Math.hypot(s.payload.ox, s.payload.oz));
+  }
+  assert.ok(swing > 0.06, '揺れていない (' + swing.toFixed(3) + 'm)');
+  // 紐の長さは超えない
+  assert.ok(swing <= e.config.payloadLength, '紐より外に出た');
+  // 手を止めると、揺れは収まっていく
+  fly(s, stick(), 6, e);
+  assert.ok(Math.hypot(s.payload.ox, s.payload.oz) < swing, '揺れが収まらない');
+});
+
+test('荷物を吊ると、同じ操作でも動きが鈍る', () => {
+  function run(withPayload) {
+    const e = payloadEnv();
+    const s = C.createState({ start: { x: 0, y: 1.4, z: -0.5 } });
+    s.flying = true;
+    if (withPayload) { s.payload = C.createPayload(0, -0.5); s.payload.attached = true; }
+    fly(s, stick({ pitch: 1 }), 1.0, e);
+    return s.vel.z;
+  }
+  assert.ok(run(true) < run(false), '荷物があっても同じ加速では困る');
+});
+
+test('落ちついて下ろせば、その場に置ける', () => {
+  const e = payloadEnv();
+  const s = C.createState({ start: { x: 0.0, y: 0.9, z: 1.0 } });
+  s.flying = true;
+  s.payload = C.createPayload(0, 1.0);
+  s.payload.attached = true;
+  fly(s, stick(), 3, e);                      // 揺れを止める
+  fly(s, stick({ throttle: -0.35 }), 2.5, e); // そっと下ろす
+  assert.ok(!s.payload.attached, 'まだ吊ったまま');
+  // 下ろしたあと、そのまま下りても拾い直さない
+  fly(s, stick({ throttle: -0.35 }), 3, e);
+  assert.ok(!s.payload.attached, '置いた荷物をまた拾ってしまった');
+  assert.ok(s.payload.justDropped || Math.hypot(s.payload.home.x - 0, s.payload.home.z - 1.0) < 0.5, '置いた所が記録されていない');
+  assert.ok(!s.crashed, s.crashReason);
+});
+
+test('荷物が家具に引っかかると分かる', () => {
+  const e = payloadEnv();
+  const top = e.room.furniture.find(f => f.name === 'テーブルの天板');
+  // 天板の高さ + 紐の長さ で飛ぶと、荷物が天板にぶつかる
+  const s = C.createState({ start: { x: 0.375, y: top.max.y + 0.30, z: 1.6 } });
+  s.flying = true;
+  s.payload = C.createPayload(0.375, 1.6);
+  s.payload.attached = true;
+  fly(s, stick({ pitch: 0.5 }), 4, e);
+  assert.ok(s.crashed && /引っかかり/.test(s.crashReason), s.crashReason || '引っかからなかった');
+});
+
+// ---------------------------------------------------------------- 猫
+
+test('高いところを飛んでいれば、猫は寄ってこない', () => {
+  const e = env();
+  e.cat = C.createCat(e.room, 3);
+  const s = C.createState({ start: { x: 0, y: 1.6, z: 2.0 } });
+  s.flying = true;
+  fly(s, stick(), 30, e);
+  assert.ok(!s.crashed, '落とされた: ' + s.crashReason);
+  assert.ok(e.cat.mood < 0.35, '猫が狙っている (mood ' + e.cat.mood.toFixed(2) + ')');
+});
+
+test('低いところを飛ぶと猫が寄ってきて、はたき落とされる', () => {
+  const e = env();
+  e.cat = C.createCat(e.room, 3);
+  // テーブルの上ではなく、開けた所で低く飛ぶ
+  const s = C.createState({ start: { x: 1.8, y: 0.5, z: 3.2 } });
+  s.flying = true;
+  fly(s, stick(), 40, e);
+  assert.ok(s.crashed && /猫/.test(s.crashReason), s.crashReason || '猫が来なかった (mood ' + e.cat.mood.toFixed(2) + ')');
+});
+
+test('猫は部屋から出ない', () => {
+  const e = env();
+  e.cat = C.createCat(e.room, 11);
+  const s = C.createState({ start: { x: 0, y: 1.8, z: 2.0 } });
+  s.flying = true;
+  for (let i = 0; i < 60 * 60; i++) {
+    C.step(s, stick(), DT, e);
+    assert.ok(e.cat.x > e.room.minX && e.cat.x < e.room.maxX, '猫が壁を抜けた x=' + e.cat.x);
+    assert.ok(e.cat.z > e.room.minZ && e.cat.z < e.room.maxZ, '猫が壁を抜けた z=' + e.cat.z);
+  }
+});
+
+test('猫の動きは seed から決まる (再現できる)', () => {
+  function run(seed) {
+    const e = env();
+    e.cat = C.createCat(e.room, seed);
+    const s = C.createState({ start: { x: 0, y: 1.8, z: 2.0 } });
+    s.flying = true;
+    fly(s, stick(), 20, e);
+    return [e.cat.x.toFixed(4), e.cat.z.toFixed(4)].join(',');
+  }
+  assert.strictEqual(run(5), run(5));
+  assert.notStrictEqual(run(5), run(6));
+});
+
+// ---------------------------------------------------------------- 音
+
+test('スロットルを上げると、モーターの音が高く大きくなる', () => {
+  const e = env();
+  const s = C.createState({ start: { x: 0, y: 0.6, z: 2 } });
+  s.flying = true;
+  fly(s, stick(), 2, e);
+  const idle = C.audioParams(s, e.config);
+  fly(s, stick({ throttle: 1 }), 1.0, e);   // 天井に当たらない範囲で
+  assert.ok(!s.crashed, s.crashReason);
+  const up = C.audioParams(s, e.config);
+  assert.ok(up.motorHz > idle.motorHz + 10, '高さが変わらない ' + idle.motorHz.toFixed(0) + ' -> ' + up.motorHz.toFixed(0));
+  assert.ok(up.motorGain > idle.motorGain, '大きさが変わらない');
+});
+
+test('速く動くほど風切り音が乗る。止まれば消える', () => {
+  const e = env();
+  const s = C.createState({ start: { x: 0, y: 1.5, z: -0.5 } });
+  s.flying = true;
+  assert.ok(C.audioParams(s, e.config).windGain < 0.005, '止まっているのに鳴っている');
+  fly(s, stick({ pitch: 1 }), 2, e);
+  assert.ok(C.audioParams(s, e.config).windGain > 0.02, '動いても鳴らない');
+});
+
+test('地上で止まっていれば音は鳴らない。墜落しても止まる', () => {
+  const e = env();
+  const s = C.createState({ start: { x: 0, y: 0, z: 2 } });
+  assert.strictEqual(C.audioParams(s, e.config).on, false);
+  s.flying = true; s.throttleVis = 0.8;
+  assert.strictEqual(C.audioParams(s, e.config).on, true);
+  s.crashed = true;
+  assert.strictEqual(C.audioParams(s, e.config).on, false);
+  assert.strictEqual(C.audioParams(s, e.config).motorGain, 0);
+});
+
+test('電池が減ると音の合図が立つ', () => {
+  const e = env();
+  const s = C.createState({ start: { x: 0, y: 1.2, z: 2 } });
+  s.flying = true;
+  assert.strictEqual(C.audioParams(s, e.config).lowBattery, false);
+  s.battery = 0.2;
+  assert.strictEqual(C.audioParams(s, e.config).lowBattery, true);
+});

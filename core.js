@@ -80,6 +80,17 @@
     halfHeight: 0.035,
     crashSpeed: 0.95,     // これ以上の速さでぶつかると墜落
     hardLandingSpeed: 1.25,
+    // 電池。手持ちの機体はホバリングで 7 分くらい。派手に飛ばすともっと短い。
+    battery: true,
+    flightSeconds: 420,
+    lowBattery: 0.25,     // ここを切ったら警告
+    forceLandBattery: 0.07, // ここを切ったら勝手に降りはじめる (実機と同じ)
+    // 吊り下げた荷物 (⑨ 荷物を運ぶ)
+    payloadLength: 0.32,  // 紐の長さ
+    payloadMass: 0.30,    // 機体に対する重さの比
+    payloadDamping: 0.9,
+    pickupRadius: 0.30,
+    pickupHeight: 0.62,
     phase: [0.0, 1.7, 3.4, 5.1]
   };
 
@@ -116,7 +127,12 @@
       pilot: { x: 0, y: 1.55, z: -0.75 },
       furniture: [
         { name: 'ソファ',     min: { x: -2.55, y: 0, z: 2.55 }, max: { x: -0.95, y: 0.78, z: 3.60 }, color: '#4a5570' },
-        { name: 'ローテーブル', min: { x: -0.35, y: 0, z: 2.30 }, max: { x: 1.10, y: 0.40, z: 3.25 }, color: '#6b5842' },
+        // ローテーブルは天板と脚に分ける。下に 34cm のすき間ができて、くぐれる。
+        { name: 'テーブルの天板', min: { x: -0.35, y: 0.34, z: 2.30 }, max: { x: 1.10, y: 0.42, z: 3.25 }, color: '#6b5842' },
+        { name: 'テーブルの脚', min: { x: -0.29, y: 0, z: 2.36 }, max: { x: -0.21, y: 0.34, z: 2.44 }, color: '#5a4936' },
+        { name: 'テーブルの脚', min: { x: 0.96, y: 0, z: 2.36 }, max: { x: 1.04, y: 0.34, z: 2.44 }, color: '#5a4936' },
+        { name: 'テーブルの脚', min: { x: -0.29, y: 0, z: 3.11 }, max: { x: -0.21, y: 0.34, z: 3.19 }, color: '#5a4936' },
+        { name: 'テーブルの脚', min: { x: 0.96, y: 0, z: 3.11 }, max: { x: 1.04, y: 0.34, z: 3.19 }, color: '#5a4936' },
         { name: 'テレビ台',   min: { x: 1.35, y: 0, z: 4.30 }, max: { x: 2.55, y: 0.52, z: 4.95 }, color: '#3d4356' },
         { name: '本棚',       min: { x: -2.55, y: 0, z: 0.10 }, max: { x: -2.10, y: 1.30, z: 1.30 }, color: '#5a4a3a' },
         { name: '観葉植物',   min: { x: 2.05, y: 0, z: 0.20 }, max: { x: 2.50, y: 1.15, z: 0.75 }, color: '#3f6b4a' }
@@ -147,8 +163,36 @@
       landed: false,
       touchedDown: false,       // このフレームで接地したか
       touchdownSpeed: 0,
-      auto: null                // 'takeoff' | 'land' | null
+      auto: null,               // 'takeoff' | 'land' | null
+      battery: o.battery != null ? o.battery : 1,
+      batteryWarned: false,
+      payload: null,            // 荷物を運ぶ課題でだけ入る
+      prevVel: { x: 0, z: 0 }
     };
+  }
+
+  /**
+   * 吊り下げる荷物。床に置いてある状態から始める。
+   * ox, oz は「機体の真下」からのずれ。振り子として揺れる。
+   */
+  function createPayload(x, z) {
+    return { home: { x: x, z: z }, x: x, y: 0.055, z: z, ox: 0, oz: 0, vox: 0, voz: 0,
+             attached: false, dropSpeed: 0, justDropped: false, everCarried: false,
+             rearmed: true };   // 一度上に戻らないと拾い直せない
+  }
+
+  /**
+   * 電池の減り。ホバリングを 1 とし、スロットルを上げたり傾けたりすると速く減る。
+   * 実機でも、上げ下げを繰り返すと目に見えて短くなる。
+   */
+  function batteryLoad(inp, state, config) {
+    const tilt = Math.hypot(state.pitch, state.roll) / (config.maxTiltDeg * DEG);
+    return 0.80 + 0.55 * Math.max(0, inp.throttle) + 0.45 * Math.min(1, tilt);
+  }
+
+  /** 残りの飛行時間 (秒)。HUD に出す。 */
+  function batterySeconds(state, config) {
+    return Math.max(0, state.battery) * config.flightSeconds;
   }
 
   /**
@@ -209,6 +253,13 @@
       if (!state.flying) state.auto = null;
     }
 
+    // 電池が尽きかけたら、実機と同じで勝手に降りはじめる。操作では止められない。
+    // 地上にいるときも効かせないと、降りた直後にまた浮いてしまう。
+    if (config.battery && state.battery <= config.forceLandBattery) {
+      inp = { throttle: state.battery <= 0 ? -1 : -0.42, yaw: 0, pitch: 0, roll: 0 };
+      if (state.flying) state.auto = 'land';
+    }
+
     state.lastInput = inp;
 
     if (!state.flying) {
@@ -225,6 +276,7 @@
         state.pitch -= state.pitch * k;
         state.roll -= state.roll * k;
         state.vel.x = state.vel.y = state.vel.z = 0;
+        state.prevVel.x = state.prevVel.z = 0;
         state.throttleVis += (Math.max(0, inp.throttle) - state.throttleVis) * approachK(6, dt);
         state.spin = (state.spin + state.throttleVis * 40 * dt) % TAU;
         state.t += dt;
@@ -279,18 +331,174 @@
       state.vel.y += (thrust - config.gravity - config.dragV * state.vel.y) * dt;
     }
 
+    // 吊った荷物は振り子。機体が動くと遅れてついてきて、そのぶん機体を引っぱり返す。
+    // 「急に動かすと荷物が暴れて、こんどは機体が振られる」を再現する。
+    if (state.payload) {
+      const p = state.payload;
+      if (p.attached) {
+        const L = config.payloadLength, r = config.payloadMass;
+        const tension = config.gravity / L;
+        // 機体の加速度 (この 1 歩ぶん)。荷物から見ると逆向きの力になる。
+        const adx = (state.vel.x - state.prevVel.x) / dt;
+        const adz = (state.vel.z - state.prevVel.z) / dt;
+        p.vox += (-tension * p.ox - config.payloadDamping * p.vox - adx) * dt;
+        p.voz += (-tension * p.oz - config.payloadDamping * p.voz - adz) * dt;
+        p.ox += p.vox * dt;
+        p.oz += p.voz * dt;
+        // 紐の長さを超えないよう丸める
+        const off = Math.hypot(p.ox, p.oz);
+        if (off > L * 0.92) { const k = L * 0.92 / off; p.ox *= k; p.oz *= k; p.vox *= k; p.voz *= k; }
+        // 紐の張力の横向き成分が、機体を引っぱる
+        state.vel.x += r * config.gravity * (p.ox / L) * dt;
+        state.vel.z += r * config.gravity * (p.oz / L) * dt;
+      }
+    }
+    state.prevVel.x = state.vel.x;
+    state.prevVel.z = state.vel.z;
+
     state.pos.x += state.vel.x * dt;
     state.pos.y += state.vel.y * dt;
     state.pos.z += state.vel.z * dt;
+
+    if (state.payload) updatePayload(state, env, dt);
+    if (env.cat) updateCat(env.cat, state, env, dt);
 
     if (state.pos.y > 0.25) state.airborne = true;
     state.touchedDown = false;
     resolveCollisions(state, env);
 
+    if (config.battery) {
+      state.battery = Math.max(0, state.battery - dt / config.flightSeconds * batteryLoad(inp, state, config));
+    }
+
     state.throttleVis += (0.55 + 0.45 * inp.throttle - state.throttleVis) * approachK(6, dt);
     state.spin = (state.spin + (18 + state.throttleVis * 45) * dt) % TAU;
     state.t += dt;
     return state;
+  }
+
+  /**
+   * 荷物の世界での位置を決め、拾う・置くを判定する。
+   * 拾う: 荷物の真上あたりまで下りると自動でひっかかる
+   * 置く: そのまま下ろして、荷物が床に触れて機体が止まっていれば離れる
+   */
+  function updatePayload(state, env, dt) {
+    const p = state.payload, config = env.config;
+    const L = config.payloadLength;
+
+    p.justDropped = false;
+
+    if (!p.attached) {
+      // 床に置いてある。真上あたりまで下りると、自動でひっかかる。
+      p.x = p.home.x; p.z = p.home.z; p.y = 0.055;
+      // 下ろしたあと、そのまま下りていると拾い直してしまう。
+      // 一度しっかり上がってからでないと、またひっかからない。
+      if (state.pos.y > config.pickupHeight + 0.15) p.rearmed = true;
+      const d = Math.hypot(state.pos.x - p.x, state.pos.z - p.z);
+      if (p.rearmed && state.flying && d <= config.pickupRadius && state.pos.y <= config.pickupHeight) {
+        p.attached = true;
+        p.everCarried = true;
+        p.ox = p.oz = p.vox = p.voz = 0;
+      }
+      return;
+    }
+
+    // 吊っている。紐の長さぶん下に、揺れたぶんだけずれて下がる。
+    const off2 = p.ox * p.ox + p.oz * p.oz;
+    const drop = Math.sqrt(Math.max(0, L * L - off2));
+    p.x = state.pos.x + p.ox;
+    p.z = state.pos.z + p.oz;
+    p.y = state.pos.y - drop;
+
+    // 家具に引っかかる
+    for (const f of env.room.furniture) {
+      const c = closestOnBox(f, { x: p.x, y: p.y, z: p.z });
+      if (Math.hypot(p.x - c.x, p.y - c.y, p.z - c.z) < 0.06) {
+        crash(state, '荷物が「' + f.name + '」に引っかかりました');
+        return;
+      }
+    }
+
+    // 床に触れた。機体が落ちついていれば、そこに置ける。
+    if (p.y <= 0.055) {
+      const hs = Math.hypot(state.vel.x, state.vel.z);
+      const swing = Math.hypot(p.vox, p.voz);
+      p.y = 0.055;
+      if (hs < 0.40 && swing < 0.45) {
+        p.attached = false;
+        p.justDropped = true;
+        p.rearmed = false;
+        p.dropSpeed = Math.max(0, -state.vel.y);
+        p.home = { x: p.x, z: p.z };   // 置いた所が新しい定位置。拾い直せる。
+      }
+    }
+  }
+
+  /**
+   * 猫。ふだんはうろうろしているが、低いところを飛んでいると寄ってくる。
+   * 動きは時刻から決まるので、テストで再現できる。
+   */
+  function createCat(room, seed) {
+    const rng = mulberry32((seed >>> 0) || 1);
+    return {
+      x: 1.2, z: 3.6, vx: 0, vz: 0,
+      mood: 0,                       // 0 = 興味なし, 1 = 完全に狙っている
+      phase: [rng() * TAU, rng() * TAU],
+      swat: false
+    };
+  }
+
+  function updateCat(cat, state, env, dt) {
+    const room = env.room, config = env.config;
+    const footD = Math.hypot(state.pos.x - cat.x, state.pos.z - cat.z);
+
+    // 低いところを飛んでいると、じわじわ興味を持つ
+    const tempting = state.flying && state.pos.y < 1.05 && footD < 2.0;
+    cat.mood = clamp(cat.mood + (tempting ? 1.1 : -0.5) * dt, 0, 1);
+
+    let tx, tz;
+    if (cat.mood > 0.35) {
+      tx = state.pos.x; tz = state.pos.z;
+    } else {
+      // うろうろ
+      tx = 0.6 + 1.7 * Math.sin(state.t * 0.21 + cat.phase[0]);
+      tz = 3.0 + 1.4 * Math.sin(state.t * 0.15 + cat.phase[1]);
+    }
+    const speed = 0.32 + cat.mood * 0.75;
+    const dx = tx - cat.x, dz = tz - cat.z;
+    const d = Math.hypot(dx, dz) || 1;
+    const k = approachK(3.0, dt);
+    cat.vx += (dx / d * speed - cat.vx) * k;
+    cat.vz += (dz / d * speed - cat.vz) * k;
+    cat.x = clamp(cat.x + cat.vx * dt, room.minX + 0.3, room.maxX - 0.3);
+    cat.z = clamp(cat.z + cat.vz * dt, room.minZ + 0.3, room.maxZ - 0.3);
+    cat.facing = Math.atan2(cat.vx, cat.vz);
+
+    // 猫パンチ。低くて近いとやられる。
+    if (state.flying && state.pos.y < 0.80 && footD < 0.42) {
+      cat.swat = true;
+      crash(state, '猫にはたき落とされました');
+    }
+  }
+
+  /**
+   * 音のパラメータ。Web Audio 側はこれをそのまま使う。
+   * ここに置いておくと、音の出し方を変えずに値だけテストできる。
+   */
+  function audioParams(state, config) {
+    const spin = clamp(state.throttleVis, 0, 1);
+    const on = state.flying || spin > 0.04;
+    const speed = Math.hypot(state.vel.x, state.vel.y, state.vel.z);
+    const climb = state.vel.y;
+    return {
+      on: on && !state.crashed,
+      // 4 つのモーターの基本の高さ。スロットルで上がる。
+      motorHz: 108 + spin * 150 + clamp(climb, -1, 1.5) * 14,
+      motorGain: on && !state.crashed ? 0.030 + spin * 0.070 : 0,
+      // 動くほど風切り音が乗る
+      windGain: clamp(speed * 0.020, 0, 0.055),
+      lowBattery: !!config.battery && state.battery <= config.lowBattery && state.flying
+    };
   }
 
   /** 点 p を AABB に押し込んだ最近点。 */
@@ -583,6 +791,8 @@
     mulberry32, clamp, wrapPi, approachK, dist2,
     DEFAULT_CONFIG, makeConfig, randomizeDrift,
     createRoom, createState, step, driftAt, throttleToThrust, headingVectors, closestOnBox,
+    createPayload, updatePayload, createCat, updateCat,
+    batteryLoad, batterySeconds, audioParams,
     makeCamera, worldToView, projectView, projectPoint, projectPolygon,
     clipNear, focalLength, circlePoints, ringPoints, updateCamera,
     bodyToWorld, mapSticks, throttleSide,

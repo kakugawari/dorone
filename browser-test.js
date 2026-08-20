@@ -157,9 +157,9 @@ async function screenHash(page) {
 
   await t('JS のエラーが出ていない', () => ok(errors.length === 0, errors.join('\n       ')));
 
-  await t('課題が 7 つ並ぶ', async () => {
+  await t('課題が 10 個並ぶ', async () => {
     const n = await page.locator('.task-item').count();
-    ok(n === 7, '見つかったのは ' + n + ' 件');
+    ok(n === 10, '見つかったのは ' + n + ' 件');
   });
 
   await t('設定の初期値はモード2 / ふつう / 高度維持あり', async () => {
@@ -490,9 +490,9 @@ async function screenHash(page) {
       const C = window.Core;
       window.__app.startTask('hover');
       const app = window.__app.app;
-      const table = app.env.room.furniture.find(f => f.name === 'ローテーブル');
+      const table = app.env.room.furniture.find(f => f.name === 'テーブルの天板');
       // テーブルのすぐ手前・低い高さに置く。画面の上ではテーブルと重なる。
-      app.state.pos = { x: (table.min.x + table.max.x) / 2, y: 0.55, z: table.min.z - 0.35 };
+      app.state.pos = { x: (table.min.x + table.max.x) / 2, y: 0.62, z: table.min.z - 0.35 };
       app.state.vel = { x: 0, y: 0, z: 0 };
       app.state.flying = true;
       // 影がテーブルと重なる角度になるよう、少し上から見る
@@ -551,6 +551,355 @@ async function screenHash(page) {
     near(after, held, 1e-6, '指を離したのに戻ってしまった');
     await page.evaluate(() => { window.__app.app.settings.altHold = 1; window.__app.startTask('hover'); });
     await page.waitForTimeout(200);
+  });
+
+  console.log('\n■ 電池');
+
+  await t('電池のメーターが出て、飛ぶと減る', async () => {
+    await page.evaluate(() => { window.__app.setBattery(1); window.__app.startTask('hover'); });
+    await page.waitForTimeout(250);
+    ok(await page.locator('#gaugeBattery').isVisible(), 'メーターが出ていない');
+    const before = parseInt(await page.locator('#batteryPct').textContent(), 10);
+    await page.evaluate(() => window.__app.simulate(60, (s) => ({ throttle: s.pos.y < 1.1 ? 0.6 : 0, yaw: 0, pitch: 0, roll: 0 })));
+    await page.waitForTimeout(200);
+    const after = parseInt(await page.locator('#batteryPct').textContent(), 10);
+    ok(before === 100, '満タンで始まっていない: ' + before);
+    ok(after < before, '減っていない (' + after + '%)');
+  });
+
+  await t('電池は次の走行にも持ちこす', async () => {
+    const mid = await page.evaluate(() => window.__app.app.battery);
+    await page.evaluate(() => window.__app.startTask('hover'));
+    await page.waitForTimeout(200);
+    const next = await page.evaluate(() => window.__app.state().battery);
+    near(next, mid, 0.001, 'やり直しで満タンに戻ってしまった');
+  });
+
+  await t('残りが少なくなると「電池を替える」が出て、押すと満タンになる', async () => {
+    await page.evaluate(() => { window.__app.setBattery(0.18); });
+    await page.waitForTimeout(200);
+    ok(await page.locator('#btnBattery').isVisible(), 'ボタンが出ていない');
+    await page.locator('#btnBattery').tap();
+    await page.waitForTimeout(150);
+    const b = await page.evaluate(() => window.__app.state().battery);
+    near(b, 1, 0.02, '替わっていない');
+    ok(await page.locator('#btnBattery').isHidden(), 'ボタンが残っている');
+  });
+
+  await t('「電池を替える」が出ても、横向きでボタンがはみ出さない', async () => {
+    await page.setViewportSize({ width: 844, height: 390 });
+    await page.evaluate(() => { window.__app.startTask('hover'); window.__app.setBattery(0.15); });
+    await page.waitForTimeout(400);
+    ok(await page.locator('#btnBattery').isVisible(), 'ボタンが出ていない');
+    const vp = page.viewportSize();
+    for (const sel of ['#btnTakeoff', '#btnRetry', '#btnBattery', '#stickL', '#stickR']) {
+      const b = await page.locator(sel).boundingBox();
+      ok(b.y >= -1, sel + ' が上にはみ出す (' + b.y.toFixed(0) + ')');
+      ok(b.y + b.height <= vp.height + 1, sel + ' が下にはみ出す (' + (b.y + b.height).toFixed(0) + ' > ' + vp.height + ')');
+    }
+    // ボタンとスティックが重なっていない
+    const L = await page.locator('#stickL').boundingBox();
+    const R = await page.locator('#stickR').boundingBox();
+    for (const sel of ['#btnTakeoff', '#btnRetry', '#btnBattery']) {
+      const b = await page.locator(sel).boundingBox();
+      ok(b.x > L.x + L.width - 1, sel + ' が左スティックに重なる');
+      ok(b.x + b.width < R.x + 1, sel + ' が右スティックに重なる');
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => window.__app.setBattery(1));
+    await page.waitForTimeout(300);
+  });
+
+  await t('電池を切る設定にすると、減らないしメーターも消える', async () => {
+    await page.evaluate(() => { window.__app.app.settings.battery = 0; window.__app.startTask('hover'); });
+    await page.waitForTimeout(250);
+    await page.evaluate(() => window.__app.simulate(40, (s) => ({ throttle: s.pos.y < 1.1 ? 0.6 : 0, yaw: 0, pitch: 0, roll: 0 })));
+    await page.waitForTimeout(200);
+    ok(await page.locator('#gaugeBattery').isHidden(), 'メーターが残っている');
+    near(await page.evaluate(() => window.__app.state().battery), 1, 1e-6, '減ってしまった');
+    await page.evaluate(() => { window.__app.app.settings.battery = 1; window.__app.setBattery(1); });
+  });
+
+  console.log('\n■ 音');
+
+  await t('画面を触ると音が動きはじめる', async () => {
+    const c = await centerOf(page, '#stickL');
+    await finger.down(1, c.x, c.y);
+    await finger.upAll();
+    await page.waitForTimeout(300);
+    const d = await page.evaluate(() => window.Sound.debug());
+    ok(d.ready, '音の準備ができていない');
+    ok(d.state === 'running', 'AudioContext が ' + d.state);
+  });
+
+  await t('スロットルを上げるとモーター音が高くなる', async () => {
+    await page.evaluate(() => window.__app.startTask('hover'));
+    await page.waitForTimeout(200);
+    await page.evaluate(() => window.__app.simulate(2.5, () => ({ throttle: 0.1, yaw: 0, pitch: 0, roll: 0 })));
+    await page.waitForTimeout(400);
+    const idle = await page.evaluate(() => window.Sound.debug().motorHz);
+    await page.evaluate(() => window.__app.simulate(1.2, () => ({ throttle: 1, yaw: 0, pitch: 0, roll: 0 })));
+    await page.waitForTimeout(500);
+    const up = await page.evaluate(() => window.Sound.debug().motorHz);
+    ok(up > idle + 8, '音が変わらない ' + idle.toFixed(0) + 'Hz -> ' + up.toFixed(0) + 'Hz');
+  });
+
+  await t('音を切ると全体の音量が 0 になる', async () => {
+    await page.locator('#btnMenu').tap();
+    await page.waitForTimeout(200);
+    await page.locator('#setSound button[data-v="0"]').tap();
+    await page.waitForTimeout(300);
+    near(await page.evaluate(() => window.Sound.debug().master), 0, 0.02, '消えていない');
+    await page.locator('#setSound button[data-v="1"]').tap();
+    await page.waitForTimeout(300);
+    near(await page.evaluate(() => window.Sound.debug().master), 1, 0.02, '戻っていない');
+  });
+
+  console.log('\n■ ミッション (荷物・くぐる・猫)');
+
+  await t('荷物の真上に下りると拾える。吊ると揺れる', async () => {
+    await page.evaluate(() => window.__app.startTask('carry'));
+    await page.waitForTimeout(250);
+    ok(await page.evaluate(() => !!window.__app.state().payload), '荷物が用意されていない');
+    const r = await page.evaluate(() => {
+      const C = window.Core;
+      let peak = 0;
+      // 荷物の真上まで行って下りる
+      window.__app.simulate(14, (s) => {
+        if (s.payload.attached) peak = Math.max(peak, Math.hypot(s.payload.ox, s.payload.oz));
+        const p = s.payload;
+        const tx = p.attached ? 1.7 : p.home.x, tz = p.attached ? 3.0 : p.home.z;
+        const ty = p.attached ? 1.0 : 0.42;
+        const ex = tx - s.pos.x, ez = tz - s.pos.z;
+        const ax = 0.8 * ex - 1.5 * s.vel.x, az = 0.8 * ez - 1.5 * s.vel.z;
+        const h = C.headingVectors(s.yaw);
+        let th = C.clamp((ty - s.pos.y) * 1.6 - s.vel.y * 0.5, -1, 1);
+        if (!s.flying && !s.airborne) th = Math.max(th, 0.5);
+        return { throttle: th, yaw: 0, pitch: C.clamp(ax * h.fwd.x + az * h.fwd.z, -1, 1),
+                 roll: C.clamp(ax * h.right.x + az * h.right.z, -1, 1) };
+      });
+      const s = window.__app.state();
+      return { attached: s.payload.attached, peak: peak, crashed: s.crashed, why: s.crashReason };
+    });
+    ok(!r.crashed, '墜落した: ' + r.why);
+    ok(r.attached, '拾えなかった');
+    // 運んでいる間のいちばん大きな振れを見る (着いたときは収まっているのが正しい)
+    ok(r.peak > 0.02, '吊っているのに一度も揺れていない (最大 ' + r.peak.toFixed(3) + 'm)');
+  });
+
+  await t('猫の課題では猫が出て、動きまわる', async () => {
+    await page.evaluate(() => window.__app.startTask('cat'));
+    await page.waitForTimeout(250);
+    const a = await page.evaluate(() => { const c = window.__app.app.env.cat; return c && { x: c.x, z: c.z }; });
+    ok(a, '猫がいない');
+    await page.evaluate(() => window.__app.simulate(8, (s) => ({ throttle: s.pos.y < 1.35 ? 0.7 : 0, yaw: 0, pitch: 0, roll: 0 })));
+    await page.waitForTimeout(200);
+    const b = await page.evaluate(() => { const c = window.__app.app.env.cat; return { x: c.x, z: c.z, mood: c.mood }; });
+    ok(Math.hypot(b.x - a.x, b.z - a.z) > 0.15, '猫が動いていない');
+    ok(b.mood < 0.4, '高く飛んでいるのに猫が狙ってきた (' + b.mood.toFixed(2) + ')');
+  });
+
+  await t('猫の課題以外では猫は出ない', async () => {
+    await page.evaluate(() => window.__app.startTask('hover'));
+    await page.waitForTimeout(200);
+    ok(await page.evaluate(() => !window.__app.app.env.cat), '猫が残っている');
+    ok(await page.evaluate(() => !window.__app.state().payload), '荷物が残っている');
+  });
+
+  await t('テーブルの下をくぐる課題が、画面でも成立する', async () => {
+    await page.evaluate(() => window.__app.startTask('under'));
+    await page.waitForTimeout(250);
+    const r = await page.evaluate(() => {
+      const C = window.Core;
+      window.__app.simulate(130, (s, run) => {
+        const g = run.task.gates[Math.min(run.gateIndex, run.task.gates.length - 1)];
+        const ex = g.x - s.pos.x, ez = g.z - s.pos.z;
+        const ax = 0.9 * ex - 1.5 * s.vel.x, az = 0.9 * ez - 1.5 * s.vel.z;
+        const h = C.headingVectors(s.yaw);
+        let th = C.clamp((g.y - s.pos.y) * 1.6 - s.vel.y * 0.5, -1, 1);
+        if (!s.flying && !s.airborne) th = Math.max(th, 0.5);
+        return { throttle: th, yaw: 0, pitch: C.clamp(ax * h.fwd.x + az * h.fwd.z, -1, 1),
+                 roll: C.clamp(ax * h.right.x + az * h.right.z, -1, 1) };
+      });
+      const run = window.__app.run();
+      return { success: run.success, gates: run.gateIndex, why: run.message };
+    });
+    ok(r.success, 'くぐれなかった (ゲート ' + r.gates + ' / ' + r.why + ')');
+  });
+
+  console.log('\n■ リプレイとゴースト');
+
+  await t('飛び終わったあと、リプレイを開ける', async () => {
+    await page.waitForSelector('#result:not([hidden])', { timeout: 4000 });
+    await page.locator('#btnReplay').tap();
+    await page.waitForTimeout(400);
+    ok(await page.locator('#replay').isVisible(), 'リプレイ画面が出ない');
+    ok((await canvasStats(page)).distinct > 12, 'リプレイの絵が描けていない');
+  });
+
+  await t('再生すると時間が進み、絵も変わる', async () => {
+    const a = await screenHash(page);
+    const t0 = await page.evaluate(() => window.__app.replay.t);
+    await page.waitForTimeout(900);
+    const t1 = await page.evaluate(() => window.__app.replay.t);
+    ok(t1 > t0 + 0.3, '時間が進まない (' + t0.toFixed(2) + ' -> ' + t1.toFixed(2) + ')');
+    ok(await screenHash(page) !== a, '絵が変わらない');
+  });
+
+  await t('止める・つまみで頭出しできる', async () => {
+    await page.locator('#replayPlay').tap();
+    await page.waitForTimeout(300);
+    const a = await page.evaluate(() => window.__app.replay.t);
+    await page.waitForTimeout(500);
+    near(await page.evaluate(() => window.__app.replay.t), a, 0.02, '止まっていない');
+    await page.evaluate(() => {
+      const el = document.getElementById('replaySeek');
+      el.value = String(Math.round(window.__app.replay.dur * 100 * 0.5));
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await page.waitForTimeout(250);
+    const half = await page.evaluate(() => window.__app.replay.t / window.__app.replay.dur);
+    near(half, 0.5, 0.05, 'つまみが効いていない');
+  });
+
+  await t('そのときのスティックの位置も出ていて、時間とともに動く', async () => {
+    const pos = [];
+    for (const frac of [0.05, 0.3, 0.6]) {
+      await page.evaluate((f) => {
+        const el = document.getElementById('replaySeek');
+        el.value = String(Math.round(window.__app.replay.dur * 100 * f));
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      }, frac);
+      await page.waitForTimeout(200);
+      pos.push(await page.evaluate(() => {
+        const a = document.getElementById('replayStickL'), b = document.getElementById('replayStickR');
+        return [a.style.left, a.style.top, b.style.left, b.style.top].join('|');
+      }));
+    }
+    ok(pos.every(p => p.split('|').every(v => v)), 'スティックの表示が出ていない');
+    ok(new Set(pos).size > 1, '時間を動かしてもスティックが変わらない: ' + pos[0]);
+  });
+
+  await t('倒しっぱなしで飛んだ記録を再生すると、その場で指摘が出る', async () => {
+    await page.locator('#replayClose').tap();
+    await page.waitForTimeout(200);
+    await page.evaluate(() => {
+      window.__app.startTask('box');
+      // わざと右スティックを倒しっぱなしにする
+      window.__app.simulate(20, (s) => ({ throttle: s.pos.y < 1.1 ? 0.7 : 0, yaw: 0, pitch: s.pos.y < 1.1 ? 0 : 0.9, roll: 0 }));
+    });
+    await page.waitForTimeout(1400);
+    const hints = await page.evaluate(() => {
+      const run = window.__app.run();
+      window.__app.openReplay(run);
+      const out = [];
+      for (let i = 1; i <= 12; i++) out.push(window.__app.replayHintAt(run.elapsed * i / 13));
+      return out;
+    });
+    ok(hints.some(h => /倒しっぱなし/.test(h)), '指摘が出ない: ' + JSON.stringify(hints));
+  });
+
+  await t('その指摘が画面にも出る', async () => {
+    await page.evaluate(() => {
+      const el = document.getElementById('replaySeek');
+      el.value = String(Math.round(window.__app.replay.dur * 100 * 0.75));
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await page.waitForTimeout(300);
+    const txt = await page.locator('#replayNote').textContent();
+    ok(/倒しっぱなし|止める舵/.test(txt), '画面に出ていない: ' + txt);
+    ok(await page.locator('#replayNote.warn').count() === 1, '目立つ色になっていない');
+  });
+
+  await t('リプレイ中の軌跡は、いまの時刻までしか出ない', async () => {
+    async function trailLen(frac) {
+      return page.evaluate((f) => {
+        const el = document.getElementById('replaySeek');
+        el.value = String(Math.round(window.__app.replay.dur * 100 * f));
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        window.__app.bench.drawScene(window.__app.sampleAt(window.__app.replay.t));
+        return window.__app.drawnTrail();
+      }, frac);
+    }
+    const early = await trailLen(0.08);
+    const mid = await trailLen(0.5);
+    const late = await trailLen(0.98);
+    ok(early < mid && mid < late, '時刻とともに伸びていない (' + early + ' / ' + mid + ' / ' + late + ')');
+    const all = await page.evaluate(() => window.__app.replay.samples.length);
+    ok(early < all * 0.3, '最初から全部出ている (' + early + ' / 全 ' + all + ')');
+  });
+
+  await t('荷物を置く台が画面に出ている', async () => {
+    const n = await page.evaluate(() => {
+      const C = window.Core;
+      window.__app.startTask('carry');
+      const app = window.__app.app;
+      const pad = app.run.task.pad;
+      // 台のほうを向いてから描く
+      app.cam.yaw = Math.atan2(pad.x - app.cam.pos.x, pad.z - app.cam.pos.z);
+      app.cam.pitch = Math.atan2(0.1 - app.cam.pos.y, Math.hypot(pad.x - app.cam.pos.x, pad.z - app.cam.pos.z));
+      window.__app.bench.drawScene();
+      const s = C.projectPoint(app.cam, { x: pad.x, y: 0.01, z: pad.z });
+      if (!s) return -1;
+      const cv = document.getElementById('view');
+      const sc = window.__app.renderScale();
+      const x0 = Math.max(0, Math.round((s.x - 30) * sc)), y0 = Math.max(0, Math.round((s.y - 20) * sc));
+      const d = cv.getContext('2d').getImageData(x0, y0, Math.round(60 * sc), Math.round(40 * sc)).data;
+      let g = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i + 1] > d[i] + 14 && d[i + 1] > 60) g++;
+      return g;
+    });
+    ok(n > 20, '緑の台が描かれていない (緑の画素 ' + n + ')');
+  });
+
+  await t('リプレイを閉じると結果に戻る', async () => {
+    // 走行を 1 つ終わらせてから開く
+    await page.evaluate(() => {
+      const C = window.Core;
+      window.__app.startTask('hover');
+      window.__app.simulate(80, (s) => {
+        const t = window.__app.run().task.target;
+        const ex = t.x - s.pos.x, ez = t.z - s.pos.z;
+        const ax = 0.9 * ex - 1.5 * s.vel.x, az = 0.9 * ez - 1.5 * s.vel.z;
+        const h = C.headingVectors(s.yaw);
+        return { throttle: C.clamp((t.y - s.pos.y) * 1.6 - s.vel.y * 0.5, -1, 1), yaw: 0,
+                 pitch: C.clamp(ax * h.fwd.x + az * h.fwd.z, -1, 1),
+                 roll: C.clamp(ax * h.right.x + az * h.right.z, -1, 1) };
+      });
+    });
+    await page.waitForSelector('#result:not([hidden])', { timeout: 4000 });
+    await page.locator('#btnReplay').tap();
+    await page.waitForTimeout(400);
+    ok(await page.locator('#replay').isVisible(), 'リプレイが開かない');
+    await page.locator('#replayClose').tap();
+    await page.waitForTimeout(300);
+    ok(await page.locator('#result').isVisible(), '結果に戻らない');
+  });
+
+  await t('クリアするとゴーストが残り、次の走行で並走する', async () => {
+    const saved = await page.evaluate(() => {
+      // ひとつ前の走行 (くぐる) はクリアしている
+      return !!JSON.parse(localStorage.getItem('dorone.ghost.v1.under') || 'null');
+    });
+    ok(saved, 'ゴーストが保存されていない');
+    await page.evaluate(() => window.__app.startTask('under'));
+    await page.waitForTimeout(250);
+    const g = await page.evaluate(() => {
+      const gh = window.__app.ghost();
+      return gh && { n: gh.d.length / 4, step: gh.step, elapsed: gh.elapsed };
+    });
+    ok(g && g.n > 5, 'ゴーストが読みこまれていない');
+    // 走行中に、ゴーストの位置が取り出せる
+    const p = await page.evaluate(() => {
+      const gh = window.__app.ghost();
+      const a = window.__app.app;
+      // 中ほどの時刻
+      a.run.elapsed = gh.elapsed * 0.4;
+      window.__app.bench.drawScene();
+      return true;
+    });
+    ok(p, 'ゴーストを描くところで落ちた');
+    ok((await canvasStats(page)).distinct > 12, 'ゴーストを出すと絵が壊れる');
   });
 
   console.log('\n■ 速さ');

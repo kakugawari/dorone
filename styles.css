@@ -148,6 +148,130 @@ body {
 .hd-arrow { fill: var(--accent); transform-origin: 0 0; }
 .gauge-fps { opacity: .55; }
 
+/* 電池 */
+.gauge-battery { gap: 5px; }
+.battery-bar {
+  display: block;
+  width: 26px;
+  height: 9px;
+  border: 1px solid rgba(255,255,255,.35);
+  border-radius: 2px;
+  padding: 1px;
+  position: relative;
+}
+.battery-bar::after {
+  content: '';
+  position: absolute;
+  right: -3px; top: 2px;
+  width: 2px; height: 3px;
+  background: rgba(255,255,255,.35);
+  border-radius: 0 1px 1px 0;
+}
+.battery-fill {
+  display: block;
+  height: 100%;
+  width: 100%;
+  background: var(--accent-2);
+  border-radius: 1px;
+}
+.gauge-battery.low .battery-fill { background: var(--warn); }
+.gauge-battery.low .gauge-value { color: var(--warn); }
+.gauge-battery.empty .battery-fill { background: var(--bad); }
+.gauge-battery.empty .gauge-value { color: var(--bad); }
+
+.round-btn-warn { border-color: rgba(255,180,84,.65); color: #ffe2ba; }
+
+/* ---------------------------------------------------------------- リプレイ */
+.replay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  padding: calc(var(--safe-t) + 8px) calc(var(--safe-r) + 10px) calc(var(--safe-b) + 12px) calc(var(--safe-l) + 10px);
+  gap: 8px;
+}
+.replay-top { display: flex; align-items: center; gap: 10px; }
+.replay-title { flex: 1 1 auto; text-align: center; font-size: 14px; font-weight: 700; text-shadow: 0 1px 3px rgba(0,0,0,.7); }
+.replay-time {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  color: var(--ink-dim);
+  min-width: 92px;
+  text-align: right;
+  text-shadow: 0 1px 3px rgba(0,0,0,.7);
+}
+.replay-note {
+  align-self: center;
+  font-size: 11.5px;
+  color: var(--ink-dim);
+  background: rgba(14,18,32,.75);
+  border-radius: 10px;
+  padding: 5px 12px;
+  text-align: center;
+  max-width: 92%;
+}
+.replay-note.warn {
+  color: #ffe2ba;
+  border: 1px solid rgba(255,180,84,.55);
+  background: rgba(46,32,14,.85);
+  font-weight: 600;
+}
+
+.replay-bar {
+  margin-top: auto;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(14,18,32,.86);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 10px 14px;
+}
+.replay-play { padding: 8px 14px; min-width: 46px; }
+.replay-seek {
+  flex: 1 1 auto;
+  min-width: 40px;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 26px;
+  background: transparent;
+  touch-action: none;
+}
+.replay-seek::-webkit-slider-runnable-track {
+  height: 5px; border-radius: 3px; background: rgba(255,255,255,.16);
+}
+.replay-seek::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 22px; height: 22px; margin-top: -8.5px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid #0e1220;
+}
+.replay-seek::-moz-range-track { height: 5px; border-radius: 3px; background: rgba(255,255,255,.16); }
+.replay-seek::-moz-range-thumb { width: 20px; height: 20px; border-radius: 50%; background: var(--accent); border: 2px solid #0e1220; }
+
+.replay-sticks { display: flex; gap: 7px; flex: 0 0 auto; }
+.mini-stick {
+  position: relative;
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  background: rgba(40,50,80,.7);
+  border: 1px solid rgba(140,165,225,.28);
+}
+.mini-knob {
+  position: absolute;
+  width: 11px; height: 11px;
+  border-radius: 50%;
+  background: var(--accent);
+  left: 50%; top: 50%;
+  margin: -5.5px 0 0 -5.5px;
+}
+
+.btn-wide { flex: 1 1 100%; }
+
 .hud-toast {
   align-self: center;
   /* 上に出すと機体と重なる。スティックのすぐ上に出す。 */

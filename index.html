@@ -38,6 +38,12 @@
       <div class="gauge"><span class="gauge-label">高さ</span><span class="gauge-value" id="gaugeAlt">0.00</span><span class="gauge-unit">m</span></div>
       <div class="gauge"><span class="gauge-label">速さ</span><span class="gauge-value" id="gaugeSpd">0.00</span><span class="gauge-unit">m/s</span></div>
       <div class="gauge gauge-heading"><span class="gauge-label">機首</span><svg id="gaugeHeading" viewBox="-12 -12 24 24" aria-hidden="true"><circle r="10.5" class="hd-ring"/><path d="M0,-8 L5,6 L0,3 L-5,6 Z" class="hd-arrow" id="hdArrow"/></svg></div>
+      <div class="gauge gauge-battery" id="gaugeBattery">
+        <span class="gauge-label">電池</span>
+        <span class="battery-bar"><span class="battery-fill" id="batteryFill"></span></span>
+        <span class="gauge-value" id="batteryPct">100</span><span class="gauge-unit">%</span>
+        <span class="gauge-unit" id="batteryLeft"></span>
+      </div>
       <div class="gauge gauge-fps"><span class="gauge-label">fps</span><span class="gauge-value" id="gaugeFps">–</span></div>
     </div>
 
@@ -57,6 +63,7 @@
     <div class="center-buttons">
       <button type="button" id="btnTakeoff" class="round-btn round-btn-go">離陸</button>
       <button type="button" id="btnRetry" class="round-btn">やり直す</button>
+      <button type="button" id="btnBattery" class="round-btn round-btn-warn" hidden>電池を替える</button>
     </div>
 
     <div class="stick-wrap">
@@ -110,6 +117,24 @@
         </div>
 
         <div class="setting">
+          <span class="setting-label">電池</span>
+          <div class="seg" id="setBattery">
+            <button type="button" data-v="1" class="on">あり</button>
+            <button type="button" data-v="0">なし</button>
+          </div>
+          <p class="setting-note" id="batteryNote">ホバリングで約 7 分。走行をまたいで持ちこします。</p>
+        </div>
+
+        <div class="setting">
+          <span class="setting-label">音</span>
+          <div class="seg" id="setSound">
+            <button type="button" data-v="1" class="on">あり</button>
+            <button type="button" data-v="0">なし</button>
+          </div>
+          <p class="setting-note">モーターの音は出力の手がかりになります。実機でも音で読んでいます。</p>
+        </div>
+
+        <div class="setting">
           <span class="setting-label">補助表示</span>
           <div class="seg" id="setAssist">
             <button type="button" data-v="1" class="on">あり</button>
@@ -159,6 +184,10 @@
       <ul class="notes" id="resNotes"></ul>
 
       <div class="result-actions">
+        <button type="button" id="btnReplay" class="btn btn-wide">飛び方を見る</button>
+      </div>
+
+      <div class="result-actions">
         <button type="button" id="btnResRetry" class="btn btn-primary">もう一度</button>
         <button type="button" id="btnResNext" class="btn">次の課題</button>
         <button type="button" id="btnResMenu" class="btn btn-ghost">課題を選ぶ</button>
@@ -166,9 +195,30 @@
     </div>
   </section>
 
+  <!-- ================= リプレイ ================= -->
+  <div id="replay" class="replay" hidden>
+    <div class="replay-top">
+      <button type="button" id="replayClose" class="chip chip-ghost" aria-label="閉じる">✕</button>
+      <div class="replay-title">飛び方を見る</div>
+      <div class="replay-time" id="replayTime">0.0s</div>
+    </div>
+
+    <div class="replay-note" id="replayNote">スティックの動きも一緒に出ています。どこで戻していないかを見てください。</div>
+
+    <div class="replay-bar">
+      <button type="button" id="replayPlay" class="round-btn replay-play">❚❚</button>
+      <input type="range" id="replaySeek" class="replay-seek" min="0" max="100" value="0" aria-label="再生位置">
+      <div class="replay-sticks">
+        <div class="mini-stick"><span class="mini-knob" id="replayStickL"></span></div>
+        <div class="mini-stick"><span class="mini-knob" id="replayStickR"></span></div>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <script src="./core.js"></script>
+<script src="./sound.js"></script>
 <script src="./tasks.js"></script>
 <script src="./app.js"></script>
 </body>

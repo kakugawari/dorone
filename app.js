@@ -37,11 +37,63 @@
     }, 250);
   }
 
+  // ---------------------------------------------------------------- 自己ベストのゴースト
+  const GHOST_KEY = 'dorone.ghost.v1.';
+  const GHOST_STEP = 0.20;     // この間隔で間引いて残す (localStorage を食いつぶさないため)
+
+  /**
+   * 軌跡を「0.2 秒ごとの x, y, z, yaw」だけにして、小数 2 桁の整数で持つ。
+   * 150 秒の走行でも 15KB ほどに収まる。
+   */
+  function packGhost(samples) {
+    const out = [];
+    let next = 0;
+    for (const s of samples) {
+      if (s.t < next) continue;
+      next = s.t + GHOST_STEP;
+      out.push(Math.round(s.x * 100), Math.round(s.y * 100), Math.round(s.z * 100), Math.round(s.yaw * 100));
+    }
+    return out;
+  }
+
+  function saveGhost(taskId, run) {
+    if (!run.success) return;
+    try {
+      const prev = JSON.parse(localStorage.getItem(GHOST_KEY + taskId) || 'null');
+      // 速いほうを残す
+      if (prev && prev.elapsed <= run.elapsed) return;
+      localStorage.setItem(GHOST_KEY + taskId, JSON.stringify({
+        elapsed: run.elapsed, stars: run.stars, step: GHOST_STEP, d: packGhost(run.samples)
+      }));
+    } catch (e) { /* 保存できなくても動作には影響しない */ }
+  }
+
+  function loadGhost(taskId) {
+    try {
+      const g = JSON.parse(localStorage.getItem(GHOST_KEY + taskId) || 'null');
+      return g && g.d && g.d.length >= 8 ? g : null;
+    } catch (e) { return null; }
+  }
+
+  /** ゴーストの、その時刻の位置。間を補間する。終わっていたら null。 */
+  function ghostAt(g, t) {
+    const n = g.d.length / 4;
+    const f = t / g.step;
+    if (f >= n - 1) return null;
+    const i = Math.floor(f), a = f - i, b = i * 4, c = b + 4;
+    const mix = function (o) { return (g.d[b + o] * (1 - a) + g.d[c + o] * a) / 100; };
+    // 方位は -π..π をまたぐので、そのまま混ぜない
+    const y0 = g.d[b + 3] / 100, y1 = g.d[c + 3] / 100;
+    return { x: mix(0), y: mix(1), z: mix(2), yaw: y0 + C.wrapPi(y1 - y0) * a };
+  }
+
   // ---------------------------------------------------------------- 状態
   const app = {
     screen: 'menu',
-    settings: loadJSON(SETTINGS_KEY, { mode: 2, difficulty: 1, altHold: 1, assist: 1 }),
+    settings: loadJSON(SETTINGS_KEY, { mode: 2, difficulty: 1, altHold: 1, assist: 1, battery: 1, sound: 1 }),
     progress: loadJSON(PROGRESS_KEY, {}),
+    battery: 1,
+    ghost: null,
     taskId: 'hover',
     run: null,
     state: null,
@@ -64,12 +116,16 @@
   ['view', 'hud', 'controls', 'menu', 'result', 'btnMenu', 'btnTakeoff', 'btnRetry',
     'hudTaskName', 'hudTaskGoal', 'hudTime', 'hudProgress', 'gaugeAlt', 'gaugeSpd',
     'hdArrow', 'gaugeFps', 'hudToast', 'hudGauges', 'taskList', 'stickL', 'stickR',
+    'gaugeBattery', 'batteryPct', 'batteryLeft', 'batteryFill', 'btnBattery', 'setBattery',
+    'setSound', 'btnReplay', 'replay', 'replayCanvas', 'replaySeek', 'replayPlay', 'replayTime',
+    'replayClose', 'replayStickL', 'replayStickR', 'replayNote', 'batteryNote',
     'knobL', 'knobR', 'labelL', 'labelR', 'resVerdict', 'resStars', 'resMsg',
     'resScores', 'resNotes', 'chartTop', 'chartAlt', 'btnResRetry', 'btnResNext',
     'btnResMenu', 'setMode', 'setDifficulty', 'setAltHold', 'setAssist', 'modeNote', 'altHoldNote'
   ].forEach(function (id) { els[id] = document.getElementById(id); });
 
   const ctx = els.view.getContext('2d');
+  const S = window.Sound;
 
   // ================================================================
   // スティック
@@ -192,16 +248,22 @@
     const seed = (Date.now() ^ (Math.random() * 0xffffffff)) >>> 0;
     const config = C.randomizeDrift(C.makeConfig(), seed, app.settings.difficulty);
     config.altHold = !!app.settings.altHold;
+    config.battery = !!app.settings.battery;
 
-    app.env = { room: C.createRoom(), config: config, wind: task.wind || null };
-    app.state = C.createState({ start: task.start, yaw: task.startYaw || 0 });
+    app.env = { room: C.createRoom(), config: config, wind: null };
+    // 電池は走行をまたいで持ちこす。実機と同じで、1 本で何回か飛ばす。
+    app.state = C.createState({ start: task.start, yaw: task.startYaw || 0, battery: app.battery });
+    T.prepare(task, app.state, app.env, seed);
     app.run = T.createRun(task.id, seed);
+    app.ghost = loadGhost(task.id);
+    lastCrashed = false;
 
     // 高度維持オフのときは、スロットルのスティックは戻らない (実機の送信機と同じ)
     const side = C.throttleSide(app.settings.mode);
     sticks.left.stickyY = sticks.right.stickyY = false;
     sticks[side].stickyY = !app.settings.altHold;
     sticks.left.x = sticks.left.y = sticks.right.x = sticks.right.y = 0;
+    resetSoundMemory();
     if (!app.settings.altHold) { sticks[side].y = -1; sticks[side].knobY = -1; }
 
     app.cam = C.makeCamera({ pos: app.env.room.pilot, yaw: 0, pitch: 0 });
@@ -216,6 +278,15 @@
     setScreen('flight');
     updateStickLabels();
     toast(task.hint, 4200);
+    if (app.ghost) {
+      // 遅らせて出すあいだに別の課題へ移ることがある。
+      // どの走行に向けたものかを覚えておいて、入れかわっていたら出さない。
+      const forRun = app.run, gh = app.ghost;
+      setTimeout(function () {
+        if (app.run !== forRun || app.ghost !== gh || app.screen !== 'flight') return;
+        if (app.run.elapsed < 6) toast('金色は自己ベスト (' + gh.elapsed.toFixed(1) + '秒) のゴーストです', 3400);
+      }, 4400);
+    }
   }
 
   /**
@@ -225,17 +296,21 @@
    * デッドゾーンも上限も「画面上の距離」で決める。角度で決め打ちにすると、
    * 横向きのときに上下がはみ出す。
    */
-  function updateCam(dt) {
+  function cameraOpts() {
     const f = C.focalLength(app.cam);
     const usableH = app.usableH || app.cam.height;
-    C.updateCamera(app.cam, app.state.pos, dt, {
+    return {
       deadYaw: Math.atan((app.cam.width / 2) * 0.26 / f) / DEG,
       deadPitch: Math.atan((usableH / 2) * 0.26 / f) / DEG,
       rate: 2.6,
       // 画面の端から 22% 内側より外には、絶対に出さない
       maxYaw: Math.atan((app.cam.width / 2) * 0.78 / f),
       maxPitch: Math.atan((usableH / 2) * 0.78 / f)
-    });
+    };
+  }
+
+  function updateCam(dt) {
+    C.updateCamera(app.cam, app.state.pos, dt, cameraOpts());
   }
 
   function aimCameraAt(p) {
@@ -249,6 +324,7 @@
     app.paused = true;
     const best = app.progress[run.task.id] || 0;
     if (run.stars > best) { app.progress[run.task.id] = run.stars; saveSoon(); }
+    saveGhost(run.task.id, run);
     showResult(run);
   }
 
@@ -294,6 +370,7 @@
     app.screen = name;
     els.menu.hidden = name !== 'menu';
     els.result.hidden = name !== 'result';
+    els.replay.hidden = name !== 'replay';
     els.hud.hidden = name !== 'flight';
     els.controls.hidden = name !== 'flight';
     if (name === 'menu') renderTaskList();
@@ -397,7 +474,7 @@
     const task = run.task;
     c.strokeStyle = 'rgba(126,227,164,.75)'; c.lineWidth = 1.5;
     if (task.kind === 'hover') { c.beginPath(); c.arc(X(task.target.x), Z(task.target.z), task.radius * s, 0, Math.PI * 2); c.stroke(); }
-    if (task.kind === 'land') { c.beginPath(); c.arc(X(task.pad.x), Z(task.pad.z), task.pad.r * s, 0, Math.PI * 2); c.stroke(); }
+    if (task.pad) { c.beginPath(); c.arc(X(task.pad.x), Z(task.pad.z), task.pad.r * s, 0, Math.PI * 2); c.stroke(); }
     if (task.kind === 'gates') {
       task.gates.forEach(function (g, i) {
         c.beginPath(); c.arc(X(g.x), Z(g.z), g.r * s * 0.5, 0, Math.PI * 2); c.stroke();
@@ -620,8 +697,10 @@
     ctx.stroke();
   }
 
-  function drawScene() {
-    const cam = app.cam, room = app.env.room, state = app.state, task = app.run.task;
+  function drawScene(override) {
+    const cam = app.cam, room = app.env.room;
+    const state = override || app.state;
+    const task = (app.screen === 'replay' ? replay.task : app.run.task) || app.run.task;
     const W = els.view.width, H = els.view.height;
 
     // 背景 (奥の壁より遠くは見えないので、暗い下地だけ)
@@ -650,6 +729,18 @@
     const items = [];
     room.furniture.forEach(function (f) { collectBox(cam, f, items); });
     collectTargets(cam, task, app.run, items);
+    if (state.payload) {
+      const p = state.payload;
+      items.push({ depth: C.worldToView(cam, { x: p.x, y: p.y, z: p.z }).z, draw: function () { drawPayload(cam, state); } });
+    }
+    if (app.env.cat) {
+      const c = app.env.cat;
+      items.push({ depth: C.worldToView(cam, { x: c.x, y: 0.2, z: c.z }).z, draw: function () { drawCat(cam, c); } });
+    }
+    if (app.ghost && !override) {
+      const g = ghostAt(app.ghost, app.run.elapsed);
+      if (g) items.push({ depth: C.worldToView(cam, g).z, draw: function () { drawGhost(cam, g); } });
+    }
     const footZ = C.worldToView(cam, { x: state.pos.x, y: 0, z: state.pos.z }).z;
     items.push({ depth: footZ + 0.001, draw: function () { drawFootMarks(cam, state); } });
     items.push({ depth: C.worldToView(cam, state.pos).z, draw: function () { drawDrone(cam, state); } });
@@ -665,6 +756,7 @@
   }
 
   function drawFloor(cam, room, state, task) {
+    const s = state;
     const x0 = room.minX, x1 = room.maxX, z0 = room.minZ, z1 = room.maxZ;
     poly(cam, [{ x: x0, y: 0, z: z0 }, { x: x1, y: 0, z: z0 }, { x: x1, y: 0, z: z1 }, { x: x0, y: 0, z: z1 }], '#20283f');
 
@@ -683,8 +775,8 @@
       strokeLines(major ? 'rgba(150,175,230,.16)' : 'rgba(150,175,230,.07)', 1);
     }
 
-    // 着陸マット
-    if (task.kind === 'land') {
+    // 着陸マット / 荷物を置く台
+    if (task.pad) {
       const pts = C.circlePoints(task.pad.x, 0.004, task.pad.z, task.pad.r, 32);
       poly(cam, pts, 'rgba(126,227,164,.16)', 'rgba(126,227,164,.85)', 2);
       strokeLoop(cam, C.circlePoints(task.pad.x, 0.005, task.pad.z, task.pad.r * 0.45, 24), 'rgba(126,227,164,.5)', 1.5);
@@ -697,7 +789,15 @@
     }
 
     // 飛んだ跡。濃さを 5 段階に丸めて、段ごとに 1 回で塗る (260 回 → 5 回)。
-    const samples = app.run.samples;
+    // リプレイ中は「いまの時刻まで」しか出さない。先が見えていては見る意味がない。
+    let samples = app.run.samples;
+    if (app.screen === 'replay' && replay.samples) {
+      samples = replay.samples;
+      let n = samples.length;
+      while (n > 1 && samples[n - 1].t > replay.t) n--;
+      samples = samples.slice(0, n);
+    }
+    app.drawnTrail = Math.max(0, samples.length - 1);
     if (samples.length > 1) {
       const from = Math.max(1, samples.length - 260);
       const span = Math.max(1, samples.length - from);
@@ -734,11 +834,11 @@
     // 対面で左右が分からなくなるのが最大の壁なので、ここを見れば分かるようにする。
     const c = Math.cos(state.yaw), sn = Math.sin(state.yaw);
     const fx = sn, fz = c, rx = c, rz = -sn;          // 前と右
-    const L = 0.34, Wd = 0.13;
+    const L = 0.26, Wd = 0.10;
     const tip = { x: state.pos.x + fx * L, y: 0.012, z: state.pos.z + fz * L };
     const bl = { x: state.pos.x - fx * L * 0.35 - rx * Wd, y: 0.012, z: state.pos.z - fz * L * 0.35 - rz * Wd };
     const br = { x: state.pos.x - fx * L * 0.35 + rx * Wd, y: 0.012, z: state.pos.z - fz * L * 0.35 + rz * Wd };
-    poly(cam, [tip, br, bl], 'rgba(79,195,255,.55)', 'rgba(140,220,255,.8)', 1.2);
+    poly(cam, [tip, br, bl], 'rgba(79,195,255,.42)', 'rgba(140,220,255,.65)', 1.2);
   }
 
   function collectBox(cam, box, out) {
@@ -819,7 +919,8 @@
             strokeLoop(cam, pts, done ? 'rgba(110,125,165,.35)' : (now ? 'rgba(126,227,164,.95)' : 'rgba(255,255,255,.28)'), now ? 3 : 1.5);
             if (now) strokeLoop(cam, C.ringPoints(g.x, g.y, g.z, g.r * 0.55, g.nx, g.nz, 20), 'rgba(126,227,164,.35)', 1.2);
             const s = C.projectPoint(cam, { x: g.x, y: g.y, z: g.z });
-            if (s && !done) {
+            // 画面の上のほうは HUD の文字が乗っている。そこには番号を出さない。
+            if (s && !done && s.y > 118) {
               ctx.fillStyle = now ? 'rgba(126,227,164,.95)' : 'rgba(255,255,255,.4)';
               ctx.font = (13 * dpr) + 'px -apple-system, sans-serif';
               ctx.textAlign = 'center';
@@ -946,6 +1047,102 @@
     }
   }
 
+  /** 吊り下げた荷物と、そこまでの紐。 */
+  function drawPayload(cam, state) {
+    const p = state.payload;
+    if (p.attached) {
+      line3(cam, { x: state.pos.x, y: state.pos.y - 0.03, z: state.pos.z },
+        { x: p.x, y: p.y + 0.05, z: p.z }, 'rgba(210,200,170,.75)', 1.5);
+    }
+    const w = 0.055, h = 0.05;
+    const c = [
+      [-w, h, w], [w, h, w], [w, h, -w], [-w, h, -w],
+      [-w, -h, w], [w, -h, w], [w, -h, -w], [-w, -h, -w]
+    ].map(function (v) { return { x: p.x + v[0], y: p.y + v[1] + h, z: p.z + v[2] }; });
+    const faces = [
+      { i: [4, 5, 6, 7], c: '#6b5230' },
+      { i: [0, 1, 5, 4], c: '#c39a5c' },
+      { i: [3, 2, 6, 7], c: '#8f6f42' },
+      { i: [1, 2, 6, 5], c: '#a8834e' },
+      { i: [0, 3, 7, 4], c: '#a8834e' },
+      { i: [0, 1, 2, 3], c: '#d8ae6c' }
+    ];
+    faces.forEach(function (f) {
+      poly(cam, f.i.map(function (i) { return c[i]; }), f.c, 'rgba(0,0,0,.35)', 1);
+    });
+  }
+
+  /** 猫。体・頭・耳・しっぽ。狙っているときは目が光る。 */
+  function drawCat(cam, cat) {
+    const yaw = cat.facing || 0;
+    const cy = Math.cos(yaw), sy = Math.sin(yaw);
+    // 猫を基準にした点 (前 = +z, 右 = +x) を世界座標に
+    function cw(lx, ly, lz) {
+      return { x: cat.x + lx * cy + lz * sy, y: ly, z: cat.z - lx * sy + lz * cy };
+    }
+    function box(x0, x1, y0, y1, z0, z1, top, side, front) {
+      const v = [
+        [x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0],
+        [x0, y0, z1], [x1, y0, z1], [x1, y0, z0], [x0, y0, z0]
+      ].map(function (p) { return cw(p[0], p[1], p[2]); });
+      [{ i: [4, 5, 6, 7], c: side }, { i: [0, 1, 5, 4], c: front },
+       { i: [3, 2, 6, 7], c: side }, { i: [1, 2, 6, 5], c: side },
+       { i: [0, 3, 7, 4], c: side }, { i: [0, 1, 2, 3], c: top }]
+        .forEach(function (f) { poly(cam, f.i.map(function (k) { return v[k]; }), f.c, 'rgba(0,0,0,.28)', 1); });
+    }
+    const fur = '#8a8f9c', furTop = '#a3a8b6', furFront = '#979dab';
+    box(-0.10, 0.10, 0.10, 0.28, -0.22, 0.16, furTop, fur, furFront);   // 体
+    box(-0.075, 0.075, 0.24, 0.39, 0.14, 0.29, furTop, fur, furFront);  // 頭
+    // 耳
+    [[-0.055], [0.055]].forEach(function (e) {
+      poly(cam, [cw(e[0] - 0.035, 0.38, 0.20), cw(e[0] + 0.035, 0.38, 0.20), cw(e[0], 0.47, 0.22)],
+        '#7d8290', 'rgba(0,0,0,.3)', 1);
+    });
+    // 目。狙っているときだけ光る。
+    const glow = cat.mood > 0.35;
+    [[-0.04], [0.04]].forEach(function (e) {
+      const s = C.projectPoint(cam, cw(e[0], 0.33, 0.295));
+      if (!s) return;
+      const f = C.focalLength(cam) / s.z;
+      ctx.fillStyle = glow ? '#ffd45e' : '#3b4152';
+      ctx.beginPath(); ctx.arc(s.x * dpr, s.y * dpr, Math.max(1, 0.016 * f) * dpr, 0, Math.PI * 2); ctx.fill();
+    });
+    // しっぽ
+    beginLines();
+    let prev = cw(0, 0.20, -0.22);
+    for (let i = 1; i <= 4; i++) {
+      const t = i / 4;
+      const cur = cw(Math.sin(t * 3 + (cat.mood > 0.35 ? 6 : 0)) * 0.06, 0.20 + t * 0.22, -0.22 - t * 0.14);
+      addLine(cam, prev, cur);
+      prev = cur;
+    }
+    strokeLines('#8a8f9c', 4);
+    // 足もとの影
+    poly(cam, C.circlePoints(cat.x, 0.006, cat.z, 0.19, 14), 'rgba(0,0,0,.30)');
+  }
+
+  /** 自己ベストのゴースト。半透明で並走する。 */
+  function drawGhost(cam, g) {
+    const fake = { pos: g, yaw: g.yaw, pitch: 0, roll: 0 };
+    const r = 0.135;
+    beginLines();
+    [[r, r], [-r, r], [r, -r], [-r, -r]].forEach(function (m) {
+      const a = C.bodyToWorld(fake, { x: m[0] * 0.2, y: 0, z: m[1] * 0.2 });
+      const b = C.bodyToWorld(fake, { x: m[0], y: 0, z: m[1] });
+      addLine(cam, a, b);
+    });
+    strokeLines('rgba(255,196,84,.55)', 3);
+    [[r, r], [-r, r], [r, -r], [-r, -r]].forEach(function (m) {
+      const pts = [];
+      for (let i = 0; i < 10; i++) {
+        const a = i / 10 * Math.PI * 2;
+        pts.push(C.bodyToWorld(fake, { x: m[0] + Math.cos(a) * 0.075, y: 0.012, z: m[1] + Math.sin(a) * 0.075 }));
+      }
+      poly(cam, pts, 'rgba(255,196,84,.10)', 'rgba(255,196,84,.35)', 1);
+    });
+    poly(cam, C.circlePoints(g.x, 0.004, g.z, 0.18, 14), 'rgba(255,196,84,.10)');
+  }
+
   // ================================================================
   // HUD
   // ================================================================
@@ -955,14 +1152,7 @@
     els.hudTaskGoal.textContent = task.goal;
     els.hudTime.innerHTML = run.elapsed.toFixed(1) + '<span>s</span>';
 
-    let frac = 0;
-    if (task.kind === 'hover' || task.kind === 'altitude') frac = run.hold / task.hold;
-    else if (task.kind === 'gates') frac = run.gateIndex / task.gates.length;
-    else if (task.kind === 'land') {
-      const d = Math.hypot(state.pos.x - task.pad.x, state.pos.z - task.pad.z);
-      frac = clamp(1 - d / 3.8, 0, 1);
-    }
-    els.hudProgress.style.width = Math.round(clamp(frac, 0, 1) * 100) + '%';
+    els.hudProgress.style.width = Math.round(clamp(T.progressOf(run, state), 0, 1) * 100) + '%';
     // 残り時間が少なくなったら色を変える
     const left = 1 - run.elapsed / task.limit;
     els.hudProgress.classList.toggle('warn', left < 0.25);
@@ -977,6 +1167,19 @@
       els.hdArrow.setAttribute('transform', 'rotate(' + (state.yaw / DEG).toFixed(1) + ')');
     }
 
+    // 電池
+    const cfg = app.env.config;
+    els.gaugeBattery.hidden = !app.settings.battery;
+    if (app.settings.battery) {
+      const pct = Math.max(0, Math.round(state.battery * 100));
+      els.batteryPct.textContent = pct;
+      els.batteryLeft.textContent = Math.round(C.batterySeconds(state, cfg)) + 's';
+      els.batteryFill.style.width = pct + '%';
+      els.gaugeBattery.classList.toggle('low', state.battery <= cfg.lowBattery);
+      els.gaugeBattery.classList.toggle('empty', state.battery <= cfg.forceLandBattery);
+    }
+    els.btnBattery.hidden = !(app.settings.battery && state.battery <= cfg.lowBattery);
+
     if (app.toastUntil && performance.now() > app.toastUntil) {
       els.hudToast.hidden = true;
       app.toastUntil = 0;
@@ -990,11 +1193,13 @@
 
   function frame(now) {
     requestAnimationFrame(frame);
-    if (app.screen !== 'flight') { app.lastFrame = 0; return; }
+    if (app.screen !== 'flight' && app.screen !== 'replay') { app.lastFrame = 0; return; }
 
     let dt = app.lastFrame ? (now - app.lastFrame) / 1000 : PHYS_DT;
     app.lastFrame = now;
     dt = Math.min(dt, 0.25);
+
+    if (app.screen === 'replay') { stepReplay(dt); return; }
 
     // fps は 0.5 秒ならしで
     app.fpsAcc += dt; app.fpsCount++;
@@ -1016,6 +1221,13 @@
 
       updateCam(dt);
 
+      app.battery = app.state.battery;
+      if (app.settings.battery && !app.state.batteryWarned
+          && app.state.battery <= app.env.config.lowBattery && app.state.flying) {
+        app.state.batteryWarned = true;
+        toastBad('電池が残り ' + Math.round(app.state.battery * 100) + '%。そろそろ降ろしてください');
+      }
+
       if (app.state.crashed && !lastCrashed) {
         lastCrashed = true;
         toastBad(app.state.crashReason);
@@ -1030,10 +1242,170 @@
       updateTakeoffButton();
     }
 
+    updateSound();
     adaptScale(dt);
     renderKnobs(dt);
     drawScene();
     updateHUD();
+  }
+
+  // ================================================================
+  // 音
+  // 何を鳴らすかは core.audioParams() が決める。ここは変わり目を拾うだけ。
+  // ================================================================
+  const heard = { gate: 0, crashed: false, carrying: false, touched: false };
+
+  function updateSound() {
+    if (!S || !S.isRunning() || app.settings.sound === 0) return;
+    const state = app.state, run = app.run;
+    if (!state || !run) return;
+
+    S.update(C.audioParams(state, app.env.config));
+
+    if (run.gateIndex > heard.gate) { heard.gate = run.gateIndex; S.cue('gate'); }
+    if (state.crashed && !heard.crashed) { heard.crashed = true; S.thud(1); S.cue('fail'); }
+    if (state.touchedDown && !heard.touched) { heard.touched = true; S.thud(0.3); }
+    if (!state.touchedDown) heard.touched = false;
+    const carrying = !!(state.payload && state.payload.attached);
+    if (carrying !== heard.carrying) { heard.carrying = carrying; S.cue(carrying ? 'pickup' : 'drop'); }
+  }
+
+  function resetSoundMemory() {
+    heard.gate = 0; heard.crashed = false; heard.touched = false;
+    heard.carrying = false;
+  }
+
+  // ================================================================
+  // リプレイ (飛んだあとを、もう一度見る)
+  // ================================================================
+  const replay = { samples: null, t: 0, playing: false, dur: 0, task: null, last: 0 };
+
+  function openReplay(run) {
+    if (!run.samples || run.samples.length < 4) return;
+    replay.samples = run.samples;
+    replay.task = run.task;
+    replay.dur = run.samples[run.samples.length - 1].t;
+    replay.t = 0;
+    replay.playing = true;
+    replay.last = 0;
+    replay.baseNote = run.notes && run.notes.length && !/きれいに飛べています/.test(run.notes[0])
+      ? run.notes[0]
+      : 'スティックの動きも一緒に出ています。どこで戻していないかを見てください。';
+    els.replayNote.textContent = replay.baseNote;
+    els.replayNote.classList.remove('warn');
+    els.replaySeek.max = String(Math.round(replay.dur * 100));
+    els.replaySeek.value = '0';
+    setScreen('replay');
+    resize();
+    // 最初の 1 枚を出す
+    const f = sampleAt(replay.t);
+    if (f) aimCameraAt(f.pos);
+  }
+
+  /** その時刻の記録。間を補間する。 */
+  function sampleAt(t) {
+    const a = replay.samples;
+    if (!a || !a.length) return null;
+    let lo = 0, hi = a.length - 1;
+    if (t <= a[0].t) return frameOf(a[0], a[0], 0);
+    if (t >= a[hi].t) return frameOf(a[hi], a[hi], 0);
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (a[mid].t <= t) lo = mid; else hi = mid;
+    }
+    const span = a[hi].t - a[lo].t || 1;
+    return frameOf(a[lo], a[hi], (t - a[lo].t) / span);
+  }
+
+  function frameOf(a, b, k) {
+    const mix = function (p, q) { return p + (q - p) * k; };
+    return {
+      pos: { x: mix(a.x, b.x), y: mix(a.y, b.y), z: mix(a.z, b.z) },
+      vel: { x: 0, y: 0, z: 0 },
+      yaw: a.yaw + C.wrapPi(b.yaw - a.yaw) * k,
+      pitch: mix(a.pitch, b.pitch),
+      roll: mix(a.roll, b.roll),
+      spin: a.t * 30,
+      throttleVis: 0.7,
+      flying: a.y > 0.06,
+      crashed: false,
+      airborne: true,
+      payload: a.px == null ? null : { x: mix(a.px, b.px), y: mix(a.py, b.py), z: mix(a.pz, b.pz), attached: !!a.pa },
+      input: { throttle: a.it, yaw: a.iy, pitch: a.ip, roll: a.ir }
+    };
+  }
+
+  function drawReplayStick(el, x, y) {
+    el.style.left = (50 + x * 34) + '%';
+    el.style.top = (50 - y * 34) + '%';
+  }
+
+  /**
+   * その時刻に「何をしているか」を、記録した操作から読み取って言葉にする。
+   * 結果画面の指摘と同じ見かたを、起きている瞬間に重ねて出す。
+   */
+  function replayHintAt(t) {
+    const a = replay.samples;
+    if (!a || !a.length) return '';
+    // 直前 1.8 秒を見る
+    let i = a.length - 1;
+    while (i > 0 && a[i].t > t) i--;
+    let j = i;
+    while (j > 0 && a[i].t - a[j].t < 1.8) j--;
+    const n = i - j + 1;
+    if (n < 8) return '';
+
+    let thr = 0, stick = 0, held = 0, fast = 0, counter = 0;
+    for (let k = j; k <= i; k++) {
+      const s = a[k];
+      thr += s.it;
+      const mag = Math.hypot(s.ip, s.ir);
+      stick += mag;
+      if (mag > 0.4) held++;
+      // 速さと、それを止める向きに入れているか
+      const nx = k > 0 ? (s.x - a[k - 1].x) : 0, nz = k > 0 ? (s.z - a[k - 1].z) : 0;
+      const sp = Math.hypot(nx, nz) / 0.06;
+      if (sp > 0.7) {
+        fast++;
+        const h = C.headingVectors(s.yaw);
+        const cx = h.fwd.x * s.ip + h.right.x * s.ir;
+        const cz = h.fwd.z * s.ip + h.right.z * s.ir;
+        if (cx * nx + cz * nz < 0) counter++;
+      }
+    }
+    if (thr / n > 0.45) return 'スロットルを入れっぱなし → 上がり続けています';
+    if (thr / n < -0.45) return 'スロットルを下げっぱなし → 下がり続けています';
+    if (held / n > 0.7) return '右スティックを倒しっぱなし → 加速し続けています';
+    if (fast > n * 0.6 && counter < fast * 0.2) return '速く動いているのに、止める舵が入っていません';
+    if (stick / n < 0.08 && fast > n * 0.5) return '手を離したまま流れています';
+    return '';
+  }
+
+  function stepReplay(dt) {
+    if (replay.playing) {
+      replay.t += dt;
+      if (replay.t >= replay.dur) { replay.t = replay.dur; replay.playing = false; updateReplayButton(); }
+      els.replaySeek.value = String(Math.round(replay.t * 100));
+    }
+    const f = sampleAt(replay.t);
+    if (!f) return;
+    C.updateCamera(app.cam, f.pos, dt, cameraOpts());
+    drawScene(f);
+    els.replayTime.textContent = replay.t.toFixed(1) + ' / ' + replay.dur.toFixed(1) + 's';
+    // そのときのスティック
+    const m = app.settings.mode;
+    const l = m === 1 ? { x: f.input.yaw, y: f.input.pitch } : { x: f.input.yaw, y: f.input.throttle };
+    const r = m === 1 ? { x: f.input.roll, y: f.input.throttle } : { x: f.input.roll, y: f.input.pitch };
+    drawReplayStick(els.replayStickL, l.x || 0, l.y || 0);
+    drawReplayStick(els.replayStickR, r.x || 0, r.y || 0);
+
+    const hint = replayHintAt(replay.t);
+    els.replayNote.textContent = hint || replay.baseNote;
+    els.replayNote.classList.toggle('warn', !!hint);
+  }
+
+  function updateReplayButton() {
+    els.replayPlay.textContent = replay.playing ? '❚❚' : '▶';
   }
 
   // ================================================================
@@ -1054,7 +1426,8 @@
   }
 
   function syncSettingsUI() {
-    [['setMode', 'mode'], ['setDifficulty', 'difficulty'], ['setAltHold', 'altHold'], ['setAssist', 'assist']]
+    [['setMode', 'mode'], ['setDifficulty', 'difficulty'], ['setAltHold', 'altHold'],
+     ['setAssist', 'assist'], ['setBattery', 'battery'], ['setSound', 'sound']]
       .forEach(function (pair) {
         const el = els[pair[0]], v = app.settings[pair[1]];
         Array.prototype.forEach.call(el.querySelectorAll('button'), function (b) {
@@ -1067,6 +1440,9 @@
     els.altHoldNote.textContent = app.settings.altHold
       ? '気圧センサーつき。スロットルを戻すとその高さで止まります。'
       : 'スロットル = 推力そのもの。中央あたりでつり合い、戻すと落ちます。スティックは戻りません。';
+    els.batteryNote.textContent = app.settings.battery
+      ? 'ホバリングで約 7 分。走行をまたいで持ちこします。減ったら「電池を替える」で新品に。'
+      : '電池を気にせず練習します。';
     updateStickLabels();
   }
 
@@ -1081,13 +1457,45 @@
     bindSeg(els.setDifficulty, 'difficulty');
     bindSeg(els.setAltHold, 'altHold', syncSettingsUI);
     bindSeg(els.setAssist, 'assist');
+    bindSeg(els.setBattery, 'battery', syncSettingsUI);
+    bindSeg(els.setSound, 'sound', function (v) { if (window.Sound) window.Sound.setMuted(!v); });
     syncSettingsUI();
 
     els.btnMenu.addEventListener('click', function () { app.paused = true; setScreen('menu'); });
     els.btnTakeoff.addEventListener('click', toggleTakeoff);
     els.btnRetry.addEventListener('click', function () { startTask(app.taskId); });
+    els.btnBattery.addEventListener('click', function () {
+      app.battery = 1;
+      if (app.state) { app.state.battery = 1; app.state.batteryWarned = false; }
+      toast('電池を新しいものに替えました');
+    });
     els.btnResRetry.addEventListener('click', function () { startTask(app.taskId); });
     els.btnResMenu.addEventListener('click', function () { setScreen('menu'); });
+    els.btnReplay.addEventListener('click', function () { if (app.run) openReplay(app.run); });
+    els.replayClose.addEventListener('click', function () {
+      replay.playing = false;
+      setScreen(app.run && app.run.finished ? 'result' : 'menu');
+    });
+    els.replayPlay.addEventListener('click', function () {
+      if (!replay.playing && replay.t >= replay.dur - 0.01) replay.t = 0;
+      replay.playing = !replay.playing;
+      updateReplayButton();
+    });
+    els.replaySeek.addEventListener('input', function () {
+      replay.t = Number(els.replaySeek.value) / 100;
+      replay.playing = false;
+      updateReplayButton();
+    });
+
+    // iOS は指で触るまで音を出せない。最初の 1 回で始める。
+    const wake = function () {
+      if (window.Sound) {
+        window.Sound.start();
+        window.Sound.setMuted(!app.settings.sound);
+      }
+    };
+    document.addEventListener('pointerdown', wake, { once: false });
+    document.addEventListener('touchstart', wake, { once: false });
     els.btnResNext.addEventListener('click', function () {
       const i = T.TASKS.findIndex(function (t) { return t.id === app.taskId; });
       startTask(T.TASKS[Math.min(i + 1, T.TASKS.length - 1)].id);
@@ -1117,10 +1525,18 @@
       input: function () { return app.input; },
       toggleTakeoff: toggleTakeoff,
       updateCam: updateCam,
+      openReplay: openReplay,
+      replayHintAt: replayHintAt,
+      replay: replay,
+      sampleAt: sampleAt,
+      ghost: function () { return app.ghost; },
+      saveGhost: saveGhost,
+      setBattery: function (v) { app.battery = v; if (app.state) app.state.battery = v; },
       resize: resize,
       // 速さの計測用。どこが重いかを部品ごとに測れるようにする。
       bench: { drawScene: drawScene, renderKnobs: renderKnobs, updateHUD: updateHUD, readSticks: readSticks },
       renderScale: function () { return app.renderScale; },
+      drawnTrail: function () { return app.drawnTrail; },
       setRenderScale: function (v) { app.renderScale = v; resize(); },
       // テストで時間を早送りする
       simulate: function (seconds, inputFn) {

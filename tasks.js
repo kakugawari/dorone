@@ -105,11 +105,59 @@
         { x: 0.0, y: 1.2, z: 2.5, r: 0.55, nx: -1, nz: -1 }
       ],
       limit: 150
+    },
+    {
+      id: 'under',
+      name: '⑧ テーブルの下をくぐる',
+      goal: '低いところを抜けて、上から戻ってくる',
+      hint: 'まず離陸して、20cm まで下げてから進む。床すれすれは意外と難しい。',
+      kind: 'gates',
+      start: { x: 0.4, y: 0, z: 0.5 }, startYaw: 0,
+      gates: [
+        { x: 0.375, y: 0.20, z: 2.775, r: 0.26, nx: 0, nz: 1 },   // 天板の下
+        { x: 0.375, y: 1.20, z: 4.20, r: 0.50, nx: 0, nz: 1 },
+        { x: 0.375, y: 1.20, z: 1.75, r: 0.45, nx: 0, nz: -1 }
+      ],
+      limit: 130
+    },
+    {
+      id: 'carry',
+      name: '⑨ 荷物を運ぶ',
+      goal: '箱を吊って、緑の台にそっと置く',
+      hint: '荷物は 32cm 下がります。テーブルの上は高めに。振り子なので、急に動かすと振り回されます。',
+      kind: 'carry',
+      start: { x: -1.75, y: 0, z: 0.5 }, startYaw: 0,
+      payload: { x: -1.4, z: 1.5 },
+      pad: { x: 1.7, z: 3.0, r: 0.42 },
+      maxDropSpeed: 0.55,
+      limit: 150
+    },
+    {
+      id: 'cat',
+      name: '⑩ 猫がいる部屋で',
+      goal: '猫に落とされずに 15 秒ホバリング',
+      hint: '低いところを飛ぶと猫が寄ってきます。高さを保てば手は出せません。',
+      kind: 'hover',
+      start: { x: -0.6, y: 0, z: 1.4 }, startYaw: 0,
+      target: { x: -0.6, y: 1.35, z: 1.4 },
+      radius: 0.70, band: 0.32, hold: 15, limit: 110,
+      cat: true
     }
   ];
 
   function findTask(id) {
     return TASKS.find(t => t.id === id) || TASKS[0];
+  }
+
+  /**
+   * その課題に必要なものを用意する (荷物・猫・風)。
+   * アプリとテストで同じものを使うために、ここに置く。
+   */
+  function prepare(task, state, env, seed) {
+    state.payload = task.payload ? Core.createPayload(task.payload.x, task.payload.z) : null;
+    env.cat = task.cat ? Core.createCat(env.room, seed) : null;
+    env.wind = task.wind || null;
+    return env;
   }
 
   // ------------------------------------------------------------------
@@ -139,6 +187,8 @@
         fastTime: 0, counterSteerTime: 0,
         wrongWayTime: 0, facingWrongWayTime: 0,
         ceilingTime: 0, maxAlt: 0,
+        swingPeak: 0, dropOffCount: 0, tempTime: 0,
+        batteryStart: 1, batteryUsed: 0,
         neverLeftGround: true
       },
       finished: false,
@@ -155,6 +205,12 @@
     if (task.kind === 'hover') return task.target;
     if (task.kind === 'altitude') return { x: state.pos.x, y: task.targetY, z: state.pos.z };
     if (task.kind === 'land') return { x: task.pad.x, y: 0, z: task.pad.z };
+    if (task.kind === 'carry') {
+      // 荷物を持つ前は荷物へ、持ったら台へ
+      const p = state.payload;
+      if (p && p.attached) return { x: task.pad.x, y: 0.55, z: task.pad.z };
+      return p ? { x: p.home.x, y: 0.45, z: p.home.z } : null;
+    }
     if (task.kind === 'gates') {
       return null; // ゲートは stepRun 側で扱う
     }
@@ -187,8 +243,15 @@
     const task = run.task, st = run.stats, room = env.room;
 
     run.elapsed += dt;
+    if (run.elapsed <= dt * 1.5) st.batteryStart = state.battery;
+    st.batteryUsed = Math.max(0, st.batteryStart - state.battery);
     if (state.pos.y > 0.15) st.neverLeftGround = false;
     st.maxAlt = Math.max(st.maxAlt, state.pos.y);
+    if (state.payload && state.payload.attached) {
+      st.swingPeak = Math.max(st.swingPeak, Math.hypot(state.payload.ox, state.payload.oz));
+    }
+    // 猫に手が届く高さにいた時間
+    if (env.cat && state.flying && state.pos.y < 1.05) st.tempTime += dt;
 
     // --- スティックの乱暴さ ---
     if (run.prevInput) {
@@ -229,11 +292,22 @@
     }
 
     // --- 軌跡の記録 (0.06 秒ごと) ---
+    // 位置だけでなく姿勢とスティックも残す。あとで「どこで何をしたか」を再生するため。
     run.sampleAcc += dt;
     if (run.sampleAcc >= 0.06) {
       run.sampleAcc = 0;
-      run.samples.push({ t: run.elapsed, x: state.pos.x, y: state.pos.y, z: state.pos.z, yaw: state.yaw });
-      if (run.samples.length > 1200) run.samples.shift();
+      const smp = {
+        t: run.elapsed,
+        x: state.pos.x, y: state.pos.y, z: state.pos.z,
+        yaw: state.yaw, pitch: state.pitch, roll: state.roll,
+        it: input.throttle, iy: input.yaw, ip: input.pitch, ir: input.roll
+      };
+      if (state.payload) {
+        smp.px = state.payload.x; smp.py = state.payload.y; smp.pz = state.payload.z;
+        smp.pa = state.payload.attached ? 1 : 0;
+      }
+      run.samples.push(smp);
+      if (run.samples.length > 3000) run.samples.shift();
     }
 
     // --- 墜落 ---
@@ -280,6 +354,26 @@
         run.gateIndex++;
         run.gateTimes.push(run.elapsed);
         if (run.gateIndex >= task.gates.length) return finish(run, true, '', env);
+      }
+
+    } else if (task.kind === 'carry') {
+      const p = state.payload;
+      const tp2 = targetPoint(task, state);
+      if (tp2) {
+        run.errorSum += Math.hypot(state.pos.x - tp2.x, state.pos.z - tp2.z) * dt;
+        run.errorTime += dt;
+      }
+      if (p && p.justDropped) {
+        const d = Math.hypot(p.x - task.pad.x, p.z - task.pad.z);
+        if (d <= task.pad.r) {
+          if (p.dropSpeed > task.maxDropSpeed) {
+            return finish(run, false, '荷物を落とす勢いが強すぎました (' + p.dropSpeed.toFixed(2) + ' m/s)', env);
+          }
+          return finish(run, true, '', env);
+        }
+        // 台の外に置いた。拾い直せばよい。
+        run.events.push({ t: run.elapsed, kind: 'dropOff', d: d });
+        st.dropOffCount++;
       }
 
     } else if (task.kind === 'land') {
@@ -400,6 +494,26 @@
         + '止まってから寄せると収まります。');
     }
 
+    // 荷物: 振り回されていないか
+    if (task.kind === 'carry' && run.stats.swingPeak > 0.20) {
+      notes.push('荷物が大きく振れています (最大 ' + (run.stats.swingPeak * 100).toFixed(0)
+        + 'cm)。吊り荷は振り子なので、動かす前と止める前に「ためる」のが要ります。');
+    }
+    if (task.kind === 'carry' && run.stats.dropOffCount > 0) {
+      notes.push('台の外に ' + run.stats.dropOffCount + ' 回落としています。'
+        + '真上まで来て、水平が止まってから下ろす。');
+    }
+    // 猫: 低く飛びすぎていないか
+    if (run.stats.tempTime > 2.5) {
+      notes.push('高さ 1.05m より下を ' + run.stats.tempTime.toFixed(1)
+        + ' 秒飛んでいました。猫はそこまで手が届きます。上で待つほうが安全です。');
+    }
+    // 電池
+    if (run.stats.batteryUsed > 0.06) {
+      notes.push('この 1 回で電池を ' + Math.round(run.stats.batteryUsed * 100)
+        + '% 使いました。上げ下げを繰り返すほど早く減ります。');
+    }
+
     if (notes.length === 0) {
       notes.push(run.success
         ? 'きれいに飛べています。次の課題へどうぞ。'
@@ -408,9 +522,29 @@
     return notes;
   }
 
+  /** HUD の進み具合 (0..1)。課題ごとに意味が違う。 */
+  function progressOf(run, state) {
+    const task = run.task;
+    if (task.kind === 'hover' || task.kind === 'altitude') return run.hold / task.hold;
+    if (task.kind === 'gates') return run.gateIndex / task.gates.length;
+    if (task.kind === 'land') {
+      return clamp(1 - Math.hypot(state.pos.x - task.pad.x, state.pos.z - task.pad.z) / 3.8, 0, 1);
+    }
+    if (task.kind === 'carry') {
+      const p = state.payload;
+      if (!p) return 0;
+      if (!p.attached) return p.everCarried ? 0.5 : 0;
+      const d = Math.hypot(p.x - task.pad.x, p.z - task.pad.z);
+      return 0.5 + clamp(1 - d / 4.2, 0, 1) * 0.5;
+    }
+    return 0;
+  }
+
   return {
     TASKS: TASKS,
+    progressOf: progressOf,
     findTask: findTask,
+    prepare: prepare,
     createRun: createRun,
     stepRun: stepRun,
     scoreRun: scoreRun,

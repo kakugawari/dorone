@@ -10,7 +10,7 @@ const DT = 1 / 60;
 
 function makeEnv(task, seed, difficulty) {
   const config = C.randomizeDrift(C.makeConfig(), seed || 1, difficulty == null ? 1 : difficulty);
-  return { room: C.createRoom(), config: config, wind: task && task.wind ? task.wind : null };
+  return { room: C.createRoom(), config: config, wind: null };
 }
 
 function startState(task) {
@@ -33,7 +33,9 @@ function autopilot(state, target, opts) {
   const h = C.headingVectors(state.yaw);
   const pitch = C.clamp(ax * h.fwd.x + az * h.fwd.z, -1, 1);
   const roll = C.clamp(ax * h.right.x + az * h.right.z, -1, 1);
-  const throttle = C.clamp((target.y - state.pos.y) * 1.6 - state.vel.y * 0.5, -1, 1);
+  let throttle = C.clamp((target.y - state.pos.y) * 1.6 - state.vel.y * 0.5, -1, 1);
+  // 地上にいる間は、一度しっかり入れないと浮かない。低い所を狙う課題で効く。
+  if (!state.flying && !state.airborne) throttle = Math.max(throttle, 0.5);
   let yaw = 0;
   if (o.yawTarget != null) yaw = C.clamp(C.wrapPi(o.yawTarget - state.yaw) * 1.4, -1, 1);
   return { throttle: throttle, yaw: yaw, pitch: pitch, roll: roll };
@@ -45,6 +47,7 @@ function playTask(taskId, opts) {
   const task = T.findTask(taskId);
   const env = makeEnv(task, o.seed || 1, o.difficulty);
   const state = startState(task);
+  T.prepare(task, state, env, o.seed || 1);
   const run = T.createRun(taskId, o.seed || 1);
   const maxSteps = Math.round((task.limit + 3) / DT);
 
@@ -71,6 +74,16 @@ function defaultAim(state, run, task) {
     const g = task.gates[Math.min(run.gateIndex, task.gates.length - 1)];
     return { x: g.x, y: g.y, z: g.z };
   }
+  if (task.kind === 'carry') {
+    const p = state.payload;
+    if (!p.attached) return { x: p.home.x, y: 0.45, z: p.home.z };
+    // 台の真上まで来て、揺れが収まってから下ろす
+    const d = Math.hypot(state.pos.x - task.pad.x, state.pos.z - task.pad.z);
+    const calm = d < 0.15 && Math.hypot(state.vel.x, state.vel.z) < 0.12
+      && Math.hypot(p.vox, p.voz) < 0.12;
+    // 荷物は 32cm 下がる。テーブルの天板 (0.42m) の上を通るので高めに飛ぶ。
+    return { x: task.pad.x, y: calm ? state.pos.y - 0.25 : 1.00, z: task.pad.z };
+  }
   if (task.kind === 'land') {
     const d = Math.hypot(state.pos.x - task.pad.x, state.pos.z - task.pad.z);
     // 真上まで来て、水平が止まってから、ゆっくり降ろす。
@@ -83,47 +96,64 @@ function defaultAim(state, run, task) {
 
 // ---------------------------------------------------------------- 課題の定義
 
-test('課題は 7 つ。id が重複していない', () => {
+test('課題は 10 個。id が重複していない', () => {
   const ids = T.TASKS.map(t => t.id);
-  assert.strictEqual(ids.length, 7);
-  assert.strictEqual(new Set(ids).size, 7);
+  assert.strictEqual(ids.length, 10);
+  assert.strictEqual(new Set(ids).size, 10);
 });
+
+/** その点に機体 (平たい円柱) が入れるか。家具と重なっていないか。 */
+function fits(room, config, p, margin) {
+  const m = margin || 0;
+  for (const f of room.furniture) {
+    const c = C.closestOnBox(f, p);
+    const dxz = Math.hypot(p.x - c.x, p.z - c.z);
+    if (dxz < config.radius + m && Math.abs(p.y - c.y) < config.halfHeight + m) return f.name;
+  }
+  return null;
+}
 
 test('どの課題も、開始地点が部屋の中で、家具に埋まっていない', () => {
   const room = C.createRoom(), config = C.makeConfig();
   for (const task of T.TASKS) {
-    const p = { x: task.start.x, y: config.radius, z: task.start.z };
+    const p = { x: task.start.x, y: config.halfHeight, z: task.start.z };
     assert.ok(p.x > room.minX && p.x < room.maxX, task.id + ' の開始 x が部屋の外');
     assert.ok(p.z > room.minZ && p.z < room.maxZ, task.id + ' の開始 z が部屋の外');
-    for (const f of room.furniture) {
-      const c = C.closestOnBox(f, p);
-      const d = Math.hypot(p.x - c.x, p.y - c.y, p.z - c.z);
-      assert.ok(d >= config.radius, task.id + ' の開始地点が「' + f.name + '」と重なっている');
-    }
+    const hit = fits(room, config, p, 0.04);
+    assert.strictEqual(hit, null, task.id + ' の開始地点が「' + hit + '」と重なっている');
   }
 });
 
-test('ゲートと目標の輪も、家具に埋まっていない', () => {
-  const room = C.createRoom();
+test('ゲート・輪・台・荷物の場所に、機体がちゃんと入れる', () => {
+  const room = C.createRoom(), config = C.makeConfig();
   const spots = [];
   for (const task of T.TASKS) {
-    if (task.kind === 'gates') for (const g of task.gates) spots.push([task.id, g]);
-    if (task.kind === 'hover') spots.push([task.id, task.target]);
-    if (task.kind === 'land') spots.push([task.id, { x: task.pad.x, y: 0.2, z: task.pad.z }]);
+    if (task.kind === 'gates') for (const g of task.gates) spots.push([task.id + ' のゲート', g]);
+    if (task.kind === 'hover') spots.push([task.id + ' の輪', task.target]);
+    if (task.pad) spots.push([task.id + ' の台', { x: task.pad.x, y: 0.3, z: task.pad.z }]);
+    if (task.payload) spots.push([task.id + ' の荷物', { x: task.payload.x, y: 0.5, z: task.payload.z }]);
   }
-  for (const [id, g] of spots) {
-    for (const f of room.furniture) {
-      const c = C.closestOnBox(f, g);
-      const d = Math.hypot(g.x - c.x, g.y - c.y, g.z - c.z);
-      assert.ok(d > 0.25, id + ' の目標が「' + f.name + '」と近すぎる (' + d.toFixed(2) + 'm)');
-    }
-    assert.ok(g.y < room.height - 0.3, id + ' の目標が天井に近すぎる');
+  for (const [what, g] of spots) {
+    const hit = fits(room, config, g, 0.02);
+    assert.strictEqual(hit, null, what + ' の場所に機体が入らない (「' + hit + '」と重なる)');
+    assert.ok(g.y < room.height - 0.3, what + ' が天井に近すぎる');
+    assert.ok(g.y > config.halfHeight, what + ' が床に埋まっている');
   }
+});
+
+test('テーブルの下は、機体が通れるだけ空いている', () => {
+  const room = C.createRoom(), config = C.makeConfig();
+  const top = room.furniture.find(f => f.name === 'テーブルの天板');
+  const gap = top.min.y;
+  assert.ok(gap > config.halfHeight * 2 + 0.10, 'すき間が ' + gap.toFixed(2) + 'm しかない');
+  // 天板の真下の真ん中に、実際に置けるか
+  const hit = fits(room, config, { x: (top.min.x + top.max.x) / 2, y: gap / 2, z: (top.min.z + top.max.z) / 2 }, 0);
+  assert.strictEqual(hit, null, 'テーブルの下に入れない (「' + hit + '」に当たる)');
 });
 
 // ---------------------------------------------------------------- クリアできるか
 
-for (const id of ['hover', 'altitude', 'box', 'nose', 'land', 'wind', 'eight']) {
+for (const id of ['hover', 'altitude', 'box', 'nose', 'land', 'wind', 'eight', 'under', 'carry', 'cat']) {
   test('「' + T.findTask(id).name + '」は上手に飛べばクリアできる', () => {
     const failures = [];
     for (const seed of [1, 2, 3]) {
