@@ -117,7 +117,7 @@
   ['view', 'hud', 'controls', 'menu', 'result', 'btnMenu', 'btnTakeoff', 'btnRetry',
     'hudTaskName', 'hudTaskGoal', 'hudTime', 'hudProgress', 'gaugeAlt', 'gaugeSpd',
     'hdArrow', 'gaugeFps', 'hudToast', 'hudGauges', 'taskList', 'stickL', 'stickR',
-    'gaugeBattery', 'batteryPct', 'batteryLeft', 'batteryFill', 'btnBattery', 'setBattery',
+    'gaugeBattery', 'batteryPct', 'batteryLeft', 'batteryFill', 'btnBattery', 'setBattery', 'btnNight',
     'setSound', 'setNight', 'nightNote', 'btnReplay', 'replay', 'replaySeek', 'replayPlay', 'replayTime',
     'replayClose', 'replayStickL', 'replayStickR', 'replayNote', 'batteryNote',
     'knobL', 'knobR', 'labelL', 'labelR', 'resVerdict', 'resStars', 'resMsg',
@@ -257,7 +257,7 @@
     T.prepare(task, app.state, app.env, seed);
     app.run = T.createRun(task.id, seed);
     app.ghost = loadGhost(task.id);
-    app.night = !!(task.night || app.settings.night);
+    applyNight();
     lastCrashed = false;
 
     // 高度維持オフのときは、スロットルのスティックは戻らない (実機の送信機と同じ)
@@ -313,6 +313,18 @@
 
   function updateCam(dt) {
     C.updateCamera(app.cam, app.state.pos, dt, cameraOpts());
+  }
+
+  /**
+   * 灯りを消すかどうか。設定で決める。
+   * 課題側で night: true を付ければ、その課題だけ夜にもできる。
+   */
+  function applyNight() {
+    const task = app.run ? app.run.task : T.findTask(app.taskId);
+    app.night = !!((task && task.night) || app.settings.night);
+    els.btnNight.textContent = app.night ? '☀' : '🌙';
+    els.btnNight.setAttribute('aria-pressed', app.night ? 'true' : 'false');
+    return app.night;
   }
 
   function aimCameraAt(p) {
@@ -712,6 +724,47 @@
     ctx.stroke();
   }
 
+  /** 投影ずみの点を、いまのパスに足す。 */
+  function tracePts(pts) {
+    ctx.moveTo(pts[0].x * dpr, pts[0].y * dpr);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x * dpr, pts[i].y * dpr);
+    ctx.closePath();
+  }
+
+  /**
+   * ゲートを「帯のある輪っか」として描く。
+   * 細い線 1 本だと、どこが穴でどこが枠なのか分からない。
+   * 外周と内周の 2 つの輪を作り、そのあいだだけを塗る (evenodd)。
+   */
+  function drawHoop(cam, g, style) {
+    // 帯を塗るのは高くつく (遅い端末で 6 つ塗ると 1 フレームに 2.6ms)。
+    // いま狙う輪と次の輪だけ塗って、その先は細い線 1 本にする。
+    if (style.mode === 'line') {
+      const mid = C.ringPoints(g.x, g.y, g.z, g.r, g.nx, g.nz, 16);
+      strokeLoop(cam, mid, style.edge, style.lw || 1);
+      return C.projectPolygon(cam, mid);
+    }
+    const seg = style.mode === 'full' ? 30 : 20;
+    const outer = C.ringPoints(g.x, g.y, g.z, g.r * 1.16, g.nx, g.nz, seg);
+    const inner = C.ringPoints(g.x, g.y, g.z, g.r * 0.88, g.nx, g.nz, seg);
+    const po = C.projectPolygon(cam, outer);
+    if (!po) return null;
+    const pi = C.projectPolygon(cam, inner);
+    ctx.beginPath();
+    tracePts(po.pts);
+    if (pi) tracePts(pi.pts);
+    ctx.fillStyle = style.fill;
+    ctx.fill('evenodd');
+    if (style.edge) {
+      ctx.strokeStyle = style.edge;
+      ctx.lineWidth = (style.lw || 1.5) * dpr;
+      ctx.beginPath(); tracePts(po.pts); ctx.stroke();
+      // 内側のふちは、いま狙う輪だけ。数を減らすほど軽い。
+      if (pi && style.mode === 'full') { ctx.beginPath(); tracePts(pi.pts); ctx.stroke(); }
+    }
+    return po;
+  }
+
   function strokeLoop(cam, pts, color, lw) {
     const p = C.projectPolygon(cam, pts);
     if (!p) return;
@@ -774,6 +827,56 @@
     items.push({ depth: C.worldToView(cam, state.pos).z, draw: function () { drawDrone(cam, state); } });
     items.sort(function (a, b) { return b.depth - a.depth; });
     items.forEach(function (it) { it.draw(); });
+
+    // 次にくぐる輪が画面の外にあるなら、端に矢印を出す。
+    // 「どっちを向けばいいのか」が分からないのが、いちばん困る。
+    if (task.kind === 'gates' && app.run.gateIndex < task.gates.length) {
+      drawOffscreenCue(cam, task.gates[app.run.gateIndex], app.run.gateIndex + 1);
+    }
+  }
+
+  function drawOffscreenCue(cam, g, label) {
+    const w = cam.width, h = app.usableH || cam.height;
+    const m = 34;                     // 矢印を置く位置 (端からの余白)
+    const v = C.worldToView(cam, { x: g.x, y: g.y, z: g.z });
+    const s = v.z >= C.NEAR ? C.projectView(cam, v) : null;
+    // 「見えているか」は余白なしで判定する。余白ぶんで判定すると、
+    // 輪が画面に映っているのに矢印も出て、番号が二重になる。
+    if (s && s.x > 0 && s.x < w && s.y > 0 && s.y < h) return;
+
+    let x, y;
+    if (s) {
+      x = clamp(s.x, m, w - m);
+      y = clamp(s.y, m, h - m);
+    } else {
+      // カメラの後ろ。左右は方位の差で決める。
+      const dYaw = C.wrapPi(Math.atan2(g.x - cam.pos.x, g.z - cam.pos.z) - cam.yaw);
+      const dPitch = Math.atan2(g.y - cam.pos.y, Math.hypot(g.x - cam.pos.x, g.z - cam.pos.z)) - cam.pitch;
+      x = dYaw > 0 ? w - m : m;
+      y = clamp(cam.cy - C.focalLength(cam) * Math.tan(clamp(dPitch, -1.2, 1.2)), m, h - m);
+    }
+    const ang = Math.atan2(y - cam.cy, x - cam.cx);
+
+    ctx.save();
+    ctx.translate(x * dpr, y * dpr);
+    ctx.rotate(ang);
+    ctx.beginPath();
+    ctx.moveTo(16 * dpr, 0);
+    ctx.lineTo(-9 * dpr, 11 * dpr);
+    ctx.lineTo(-4 * dpr, 0);
+    ctx.lineTo(-9 * dpr, -11 * dpr);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(126,227,164,.92)';
+    ctx.fill();
+    ctx.restore();
+
+    ctx.font = '700 ' + (12 * dpr) + 'px -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.lineWidth = 3.5 * dpr;
+    ctx.strokeStyle = 'rgba(8,11,20,.85)';
+    ctx.strokeText(String(label), x * dpr - Math.cos(ang) * 22 * dpr, y * dpr - Math.sin(ang) * 22 * dpr + 4 * dpr);
+    ctx.fillStyle = 'rgba(180,255,210,.98)';
+    ctx.fillText(String(label), x * dpr - Math.cos(ang) * 22 * dpr, y * dpr - Math.sin(ang) * 22 * dpr + 4 * dpr);
   }
 
   function drawWall(cam, pts, base) {
@@ -968,25 +1071,42 @@
         out.push({ depth: pr.depth, draw: function () { strokeLoop(cam, pts, col + lv[1] + ')', lv[1] > 0.5 ? 2 : 1); } });
       });
     } else if (task.kind === 'gates') {
+      // 「いま狙う輪」だけがはっきり分かるように、はっきり差をつける。
+      //   くぐった輪 … 消えかけ
+      //   いまの輪   … 濃い帯 + 太いふち + ゆっくり明滅 + 大きい番号
+      //   次の輪     … 中くらい
+      //   その先     … 細いふちだけ (コース全体は見えるように残す)
+      const pulse = 0.84 + 0.16 * Math.sin(performance.now() * 0.0042);
       task.gates.forEach(function (g, i) {
-        const done = i < run.gateIndex;
-        const now = i === run.gateIndex;
-        const pts = C.ringPoints(g.x, g.y, g.z, g.r, g.nx, g.nz, 26);
-        const pr = C.projectPolygon(cam, pts);
-        if (!pr) return;
+        const step = i - run.gateIndex;
+        if (step < 0 && step > -1.5) { /* 直前にくぐった輪も薄く残す */ }
+        const style = step < 0
+          ? { mode: 'line', edge: 'rgba(110,125,165,.24)', lw: 1, num: 0 }
+          : step === 0
+            ? { mode: 'full', fill: 'rgba(126,227,164,' + (0.30 * pulse).toFixed(3) + ')',
+                edge: 'rgba(150,255,190,' + pulse.toFixed(3) + ')', lw: 3, num: 1 }
+            : step === 1
+              ? { mode: 'band', fill: 'rgba(200,225,255,.10)', edge: 'rgba(200,225,255,.48)', lw: 1.8, num: 0.55 }
+              : { mode: 'line', edge: 'rgba(200,225,255,.30)', lw: 1.3, num: 0.34 };
+
+        const probe = C.projectPolygon(cam, C.ringPoints(g.x, g.y, g.z, g.r, g.nx, g.nz, 10));
+        if (!probe) return;
         out.push({
-          depth: pr.depth,
+          depth: probe.depth + (step === 0 ? -0.002 : 0),   // いまの輪はいちばん手前に
           draw: function () {
-            strokeLoop(cam, pts, done ? 'rgba(110,125,165,.35)' : (now ? 'rgba(126,227,164,.95)' : 'rgba(255,255,255,.28)'), now ? 3 : 1.5);
-            if (now) strokeLoop(cam, C.ringPoints(g.x, g.y, g.z, g.r * 0.55, g.nx, g.nz, 20), 'rgba(126,227,164,.35)', 1.2);
+            drawHoop(cam, g, style);
+            if (!style.num) return;
             const s = C.projectPoint(cam, { x: g.x, y: g.y, z: g.z });
             // 画面の上のほうは HUD の文字が乗っている。そこには番号を出さない。
-            if (s && !done && s.y > 118) {
-              ctx.fillStyle = now ? 'rgba(126,227,164,.95)' : 'rgba(255,255,255,.4)';
-              ctx.font = (13 * dpr) + 'px -apple-system, sans-serif';
-              ctx.textAlign = 'center';
-              ctx.fillText(String(i + 1), s.x * dpr, (s.y + 5) * dpr);
-            }
+            if (!s || s.y < 118) return;
+            const size = (step === 0 ? 24 : 14) * dpr;
+            ctx.font = '700 ' + size + 'px -apple-system, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.lineWidth = 4 * dpr;
+            ctx.strokeStyle = 'rgba(8,11,20,.85)';
+            ctx.strokeText(String(i + 1), s.x * dpr, s.y * dpr + size * 0.35);
+            ctx.fillStyle = step === 0 ? 'rgba(180,255,210,.98)' : 'rgba(210,230,255,' + style.num + ')';
+            ctx.fillText(String(i + 1), s.x * dpr, s.y * dpr + size * 0.35);
           }
         });
       });
@@ -1272,7 +1392,9 @@
   function updateHUD() {
     const run = app.run, state = app.state, task = run.task;
     els.hudTaskName.textContent = task.name;
-    els.hudTaskGoal.textContent = task.goal;
+    els.hudTaskGoal.textContent = task.kind === 'gates'
+      ? task.goal + '  (' + Math.min(run.gateIndex + 1, task.gates.length) + ' / ' + task.gates.length + ')'
+      : task.goal;
     els.hudTime.innerHTML = run.elapsed.toFixed(1) + '<span>s</span>';
 
     els.hudProgress.style.width = Math.round(clamp(T.progressOf(run, state), 0, 1) * 100) + '%';
@@ -1566,6 +1688,10 @@
     els.nightNote.textContent = app.settings.night
       ? '灯りを消しています。前が白、後ろが赤。補助表示も切ると、実機の夜間飛行と同じになります。'
       : '灯りを消すと、機体の LED だけが見えます。前が白、後ろが赤。向きを読む練習に。';
+    if (els.btnNight) {
+      els.btnNight.textContent = app.settings.night ? '☀' : '🌙';
+      els.btnNight.setAttribute('aria-pressed', app.settings.night ? 'true' : 'false');
+    }
     els.batteryNote.textContent = app.settings.battery
       ? 'ホバリングで約 7 分。走行をまたいで持ちこします。減ったら「電池を替える」で新品に。'
       : '電池を気にせず練習します。';
@@ -1584,11 +1710,18 @@
     bindSeg(els.setAltHold, 'altHold', syncSettingsUI);
     bindSeg(els.setAssist, 'assist');
     bindSeg(els.setBattery, 'battery', syncSettingsUI);
-    bindSeg(els.setNight, 'night', syncSettingsUI);
+    bindSeg(els.setNight, 'night', function () { syncSettingsUI(); applyNight(); });
     bindSeg(els.setSound, 'sound', function (v) { if (window.Sound) window.Sound.setMuted(!v); });
     syncSettingsUI();
 
     els.btnMenu.addEventListener('click', function () { app.paused = true; setScreen('menu'); });
+    els.btnNight.addEventListener('click', function () {
+      app.settings.night = app.settings.night ? 0 : 1;
+      saveSoon();
+      syncSettingsUI();
+      applyNight();
+      toast(app.night ? '灯りを消しました。前が白、後ろが赤です' : '灯りを点けました', 2000);
+    });
     els.btnTakeoff.addEventListener('click', toggleTakeoff);
     els.btnRetry.addEventListener('click', function () { startTask(app.taskId); });
     els.btnBattery.addEventListener('click', function () {
@@ -1660,6 +1793,7 @@
       saveGhost: saveGhost,
       setBattery: function (v) { app.battery = v; if (app.state) app.state.battery = v; },
       isNight: function () { return app.night; },
+      applyNight: applyNight,
       resize: resize,
       // 速さの計測用。どこが重いかを部品ごとに測れるようにする。
       bench: { drawScene: drawScene, renderKnobs: renderKnobs, updateHUD: updateHUD, readSticks: readSticks },

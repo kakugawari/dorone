@@ -99,6 +99,8 @@ body {
   backdrop-filter: blur(8px);
 }
 .chip:active { background: var(--panel-2); }
+.chip-night { font-size: 17px; }
+.chip-night[aria-pressed="true"] { border-color: rgba(255,196,84,.6); background: rgba(46,36,16,.85); }
 
 .hud-task { flex: 1 1 auto; min-width: 0; text-align: center; }
 .hud-task-name { font-size: 14px; font-weight: 700; letter-spacing: .02em; text-shadow: 0 1px 3px rgba(0,0,0,.7); }

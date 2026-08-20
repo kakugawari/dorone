@@ -157,9 +157,9 @@ async function screenHash(page) {
 
   await t('JS のエラーが出ていない', () => ok(errors.length === 0, errors.join('\n       ')));
 
-  await t('課題が 10 個並ぶ', async () => {
+  await t('課題が 9 個並ぶ', async () => {
     const n = await page.locator('.task-item').count();
-    ok(n === 10, '見つかったのは ' + n + ' 件');
+    ok(n === 9, '見つかったのは ' + n + ' 件');
   });
 
   await t('設定の初期値はモード2 / ふつう / 高度維持あり', async () => {
@@ -737,23 +737,37 @@ async function screenHash(page) {
     });
   }
 
-  await t('⑩ は暗い部屋になる。明るい課題よりはっきり暗い', async () => {
+  await t('HUD の月ボタンで、その場で灯りを消せる', async () => {
     await page.evaluate(() => { window.__app.app.settings.night = 0; window.__app.startTask('nose'); });
     await page.waitForTimeout(300);
     await page.evaluate(() => window.__app.simulate(3, (s) => ({ throttle: s.pos.y < 1.2 ? 0.7 : 0, yaw: 0, pitch: 0, roll: 0 })));
     await page.waitForTimeout(250);
     const day = await lightStats(page);
 
-    await page.evaluate(() => window.__app.startTask('night'));
-    await page.waitForTimeout(300);
+    await page.locator('#btnNight').tap();
+    await page.waitForTimeout(400);
     ok(await page.evaluate(() => window.__app.isNight()), '夜になっていない');
-    await page.evaluate(() => window.__app.simulate(3, (s) => ({ throttle: s.pos.y < 1.2 ? 0.7 : 0, yaw: 0, pitch: 0, roll: 0 })));
-    await page.waitForTimeout(250);
+    ok(await page.locator('#btnNight[aria-pressed="true"]').count() === 1, 'ボタンの状態が変わっていない');
     const night = await lightStats(page);
 
     console.log('       明るさ 昼 ' + day.avg.toFixed(0) + ' / 夜 ' + night.avg.toFixed(0));
     ok(night.avg < day.avg * 0.65, '夜のほうが暗くない (' + day.avg.toFixed(0) + ' -> ' + night.avg.toFixed(0) + ')');
     ok(night.avg > 3, '真っ暗すぎて何も見えない (' + night.avg.toFixed(1) + ')');
+  });
+
+  await t('もう一度押すと明るく戻る。課題を変えても設定は残る', async () => {
+    await page.locator('#btnNight').tap();
+    await page.waitForTimeout(300);
+    ok(!await page.evaluate(() => window.__app.isNight()), '明るく戻らない');
+    await page.locator('#btnNight').tap();
+    await page.waitForTimeout(200);
+    await page.evaluate(() => window.__app.startTask('box'));
+    await page.waitForTimeout(300);
+    ok(await page.evaluate(() => window.__app.isNight()), '課題を変えたら明るくなってしまった');
+    await page.evaluate(() => window.__app.startTask('nose'));
+    await page.waitForTimeout(300);
+    await page.evaluate(() => window.__app.simulate(3, (s) => ({ throttle: s.pos.y < 1.2 ? 0.7 : 0, yaw: 0, pitch: 0, roll: 0 })));
+    await page.waitForTimeout(200);
   });
 
   await t('暗くても、機体の LED は見える', async () => {
@@ -780,7 +794,7 @@ async function screenHash(page) {
     ok(toward.white > away.white + 5, '前を向けても白が増えない (' + toward.white + ' vs ' + away.white + ')');
   });
 
-  await t('設定で暗くすると、どの課題でも夜になる。戻せる', async () => {
+  await t('メニューの設定でも切り替えられて、月ボタンと同期する', async () => {
     await page.locator('#btnMenu').tap();
     await page.waitForTimeout(200);
     await page.locator('#setNight button[data-v="1"]').tap();
@@ -788,6 +802,7 @@ async function screenHash(page) {
     await page.evaluate(() => window.__app.startTask('hover'));
     await page.waitForTimeout(300);
     ok(await page.evaluate(() => window.__app.isNight()), '設定が効いていない');
+    ok(await page.locator('#btnNight[aria-pressed="true"]').count() === 1, '月ボタンと食い違っている');
     const dark = await lightStats(page);
 
     await page.locator('#btnMenu').tap();

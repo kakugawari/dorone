@@ -96,10 +96,37 @@ function defaultAim(state, run, task) {
 
 // ---------------------------------------------------------------- 課題の定義
 
-test('課題は 10 個。id が重複していない', () => {
+test('課題は 9 個。id が重複していない', () => {
   const ids = T.TASKS.map(t => t.id);
-  assert.strictEqual(ids.length, 10);
-  assert.strictEqual(new Set(ids).size, 10);
+  assert.strictEqual(ids.length, 9);
+  assert.strictEqual(new Set(ids).size, 9);
+});
+
+test('ゲートどうしが重なっていない。同じ場所に 2 つ置かない', () => {
+  for (const task of T.TASKS) {
+    if (task.kind !== 'gates') continue;
+    for (let i = 0; i < task.gates.length; i++) {
+      for (let j = i + 1; j < task.gates.length; j++) {
+        const a = task.gates[i], b = task.gates[j];
+        const d = Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+        assert.ok(d > a.r + b.r,
+          task.id + ' の輪 ' + (i + 1) + ' と ' + (j + 1) + ' が重なっている (' + d.toFixed(2) + 'm)');
+      }
+    }
+  }
+});
+
+test('⑦ は本当に 8 の字になっている (真ん中で交差する)', () => {
+  const g = T.findTask('eight').gates;
+  // 3→4 と 6→1 の線分が交差していれば 8 の字
+  function cross(p1, p2, p3, p4) {
+    const d = (p2.x - p1.x) * (p4.z - p3.z) - (p2.z - p1.z) * (p4.x - p3.x);
+    if (Math.abs(d) < 1e-9) return false;
+    const t = ((p3.x - p1.x) * (p4.z - p3.z) - (p3.z - p1.z) * (p4.x - p3.x)) / d;
+    const u = ((p3.x - p1.x) * (p2.z - p1.z) - (p3.z - p1.z) * (p2.x - p1.x)) / d;
+    return t > 0 && t < 1 && u > 0 && u < 1;
+  }
+  assert.ok(cross(g[2], g[3], g[5], g[0]), '交差していない = 8 の字になっていない');
 });
 
 /** その点に機体 (平たい円柱) が入れるか。家具と重なっていないか。 */
@@ -153,7 +180,7 @@ test('テーブルの下は、機体が通れるだけ空いている', () => {
 
 // ---------------------------------------------------------------- クリアできるか
 
-for (const id of ['hover', 'altitude', 'box', 'nose', 'land', 'wind', 'eight', 'under', 'carry', 'night']) {
+for (const id of ['hover', 'altitude', 'box', 'nose', 'land', 'wind', 'eight', 'under', 'carry']) {
   test('「' + T.findTask(id).name + '」は上手に飛べばクリアできる', () => {
     const failures = [];
     for (const seed of [1, 2, 3]) {
