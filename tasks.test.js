@@ -96,11 +96,17 @@ function defaultAim(state, run, task) {
 
 // ---------------------------------------------------------------- 課題の定義
 
-test('課題は 9 個。id が重複していない', () => {
+test('課題は 10 個 (自由に飛ぶ + 9 課題)。id が重複していない', () => {
   const ids = T.TASKS.map(t => t.id);
-  assert.strictEqual(ids.length, 9);
-  assert.strictEqual(new Set(ids).size, 9);
+  assert.strictEqual(ids.length, 10);
+  assert.strictEqual(new Set(ids).size, 10);
+  assert.strictEqual(ids[0], 'free', '自由に飛ぶは、いちばん上に置く');
 });
+
+/** その課題が使う場所 (部屋 か 広場)。 */
+function placeOf(task) {
+  return task.field ? C.createField() : C.createRoom();
+}
 
 test('ゲートどうしが重なっていない。同じ場所に 2 つ置かない', () => {
   for (const task of T.TASKS) {
@@ -140,9 +146,10 @@ function fits(room, config, p, margin) {
   return null;
 }
 
-test('どの課題も、開始地点が部屋の中で、家具に埋まっていない', () => {
-  const room = C.createRoom(), config = C.makeConfig();
+test('どの課題も、開始地点が場所の中で、家具に埋まっていない', () => {
+  const config = C.makeConfig();
   for (const task of T.TASKS) {
+    const room = placeOf(task);
     const p = { x: task.start.x, y: config.halfHeight, z: task.start.z };
     assert.ok(p.x > room.minX && p.x < room.maxX, task.id + ' の開始 x が部屋の外');
     assert.ok(p.z > room.minZ && p.z < room.maxZ, task.id + ' の開始 z が部屋の外');
@@ -153,6 +160,8 @@ test('どの課題も、開始地点が部屋の中で、家具に埋まって�
 
 test('ゲート・輪・台・荷物の場所に、機体がちゃんと入れる', () => {
   const room = C.createRoom(), config = C.makeConfig();
+  // 広場の課題には輪も台もない
+
   const spots = [];
   for (const task of T.TASKS) {
     if (task.kind === 'gates') for (const g of task.gates) spots.push([task.id + ' のゲート', g]);
@@ -193,10 +202,61 @@ for (const id of ['hover', 'altitude', 'box', 'nose', 'land', 'wind', 'eight', '
 
 test('全部の課題を通しで飛ばしても、どこかで固まったりしない', () => {
   for (const task of T.TASKS) {
+    if (task.kind === 'free') continue;   // 自由に飛ぶモードは終わらないのが正しい
     const r = playTask(task.id, { seed: 9 });
     assert.ok(r.run.finished, task.id + ' が終わらなかった');
     assert.ok(Number.isFinite(r.state.pos.x + r.state.pos.y + r.state.pos.z), task.id + ' で NaN が出た');
   }
+});
+
+// ---------------------------------------------------------------- 広場 (自由に飛ぶ)
+
+test('広場には壁も天井もない。端や上に当たっても墜落しない', () => {
+  const field = C.createField();
+  assert.strictEqual(field.open, true);
+  const env = { room: null, config: C.randomizeDrift(C.makeConfig(), 1, 1) };
+  const task = T.findTask('free');
+  const state = C.createState({ start: task.start });
+  T.prepare(task, state, env, 1);
+  assert.strictEqual(env.room.open, true, '広場に差し替わっていない');
+
+  const run = T.createRun('free', 1);
+  let atLimit = 0;
+  for (let i = 0; i < 60 * 90; i++) {
+    const t = i / 60;
+    // わざと乱暴に振り回す
+    const input = {
+      throttle: t < 3 ? 0.9 : Math.sin(t * 0.7) * 0.95,
+      yaw: Math.sin(t * 0.31) * 0.9,
+      pitch: Math.sin(t * 0.53),
+      roll: Math.cos(t * 0.41)
+    };
+    C.step(state, input, DT, env);
+    T.stepRun(run, state, input, DT, env);
+    if (state.atLimit) atLimit++;
+    assert.ok(!state.crashed, t.toFixed(1) + '秒で墜落した: ' + state.crashReason);
+  }
+  assert.ok(atLimit > 30, '端や上限に一度も当たっていない (広さの確認にならない)');
+  assert.ok(!run.finished, '自由に飛ぶモードは終わらない');
+});
+
+test('広場でも、地面には落ちる (着陸の練習はできる)', () => {
+  const env = { room: null, config: C.makeConfig({ driftAccel: 0, altHoldWobble: 0, trim: { x: 0, z: 0 } }) };
+  const task = T.findTask('free');
+  const state = C.createState({ start: task.start });
+  T.prepare(task, state, env, 1);
+  state.pos.y = 2.0; state.flying = true; state.airborne = true;
+  for (let i = 0; i < 60 * 12; i++) C.step(state, { throttle: -0.5, yaw: 0, pitch: 0, roll: 0 }, DT, env);
+  assert.ok(!state.flying, 'まだ飛んでいる (高度 ' + state.pos.y.toFixed(2) + ')');
+  assert.ok(!state.crashed, s => s);
+});
+
+test('広場は部屋より広く、パーツは少ない (描くものが減る)', () => {
+  const room = C.createRoom(), field = C.createField();
+  const area = function (r) { return (r.maxX - r.minX) * (r.maxZ - r.minZ); };
+  assert.ok(area(field) > area(room) * 5, '広場が広くない');
+  assert.ok(field.furniture.length < room.furniture.length, '広場のほうがパーツが多い');
+  assert.strictEqual(field.decals.length, 0);
 });
 
 // ---------------------------------------------------------------- 採点

@@ -157,9 +157,12 @@ async function screenHash(page) {
 
   await t('JS のエラーが出ていない', () => ok(errors.length === 0, errors.join('\n       ')));
 
-  await t('課題が 9 個並ぶ', async () => {
+  await t('課題が 10 個並ぶ (自由に飛ぶ + 9 課題)', async () => {
     const n = await page.locator('.task-item').count();
-    ok(n === 9, '見つかったのは ' + n + ' 件');
+    ok(n === 10, '見つかったのは ' + n + ' 件');
+    ok(await page.locator('.task-item[data-task="free"]').count() === 1, '自由に飛ぶが無い');
+    const first = await page.locator('.task-item').first().getAttribute('data-task');
+    ok(first === 'free', 'いちばん上が「' + first + '」になっている');
   });
 
   await t('設定の初期値はモード2 / ふつう / 高度維持あり', async () => {
@@ -181,7 +184,7 @@ async function screenHash(page) {
   console.log('\n■ 飛行画面が実際に描けているか');
 
   await t('課題を始めると飛行画面になる', async () => {
-    await page.locator('.task-item').first().tap();
+    await page.locator('.task-item[data-task="hover"]').tap();
     await page.waitForTimeout(400);
     ok(await page.locator('#controls').isVisible(), '操作が出ていない');
     ok(await page.locator('#hud').isVisible(), 'HUD が出ていない');
@@ -397,7 +400,7 @@ async function screenHash(page) {
   await t('星の記録が残る', async () => {
     await page.locator('#btnResMenu').tap();
     await page.waitForTimeout(250);
-    const n = await page.locator('.task-item').first().locator('.ti-stars .on').count();
+    const n = await page.locator('.task-item[data-task="hover"]').locator('.ti-stars .on').count();
     ok(n >= 1, '記録された星が ' + n);
   });
 
@@ -714,6 +717,69 @@ async function screenHash(page) {
       return { success: run.success, gates: run.gateIndex, why: run.message };
     });
     ok(r.success, 'くぐれなかった (ゲート ' + r.gates + ' / ' + r.why + ')');
+  });
+
+  console.log('\n■ 広場 (自由に飛ぶ)');
+
+  await t('広場は壁も天井もない。ぶつけても止まらず、置きなおして続けられる', async () => {
+    await page.evaluate(() => { window.__app.app.settings.night = 0; });
+    await page.locator('#btnMenu').tap();
+    await page.waitForTimeout(200);
+    await page.locator('.task-item[data-task="free"]').tap();
+    await page.waitForTimeout(400);
+    ok(await page.evaluate(() => window.__app.app.env.room.open === true), '広場になっていない');
+    const s = await canvasStats(page);
+    ok(s.distinct > 10, '広場が描けていない');
+
+    // 端まで思いきり飛ばす
+    const r = await page.evaluate(() => {
+      let atLimit = 0;
+      window.__app.simulate(25, (st) => {
+        if (st.atLimit) atLimit++;
+        return { throttle: st.pos.y < 1.5 ? 0.9 : 0, yaw: 0, pitch: 1, roll: 0.6 };
+      });
+      const st = window.__app.state();
+      return { atLimit: atLimit, crashed: st.crashed, why: st.crashReason,
+               finished: window.__app.run().finished,
+               x: st.pos.x, z: st.pos.z };
+    });
+    ok(r.atLimit > 10, '端まで行っていない (広さの確認にならない)');
+    ok(!r.crashed, '端に当たって墜落した: ' + r.why);
+    ok(!r.finished, '自由に飛ぶモードが終わってしまった');
+  });
+
+  await t('広場では進み具合のバーを出さない', async () => {
+    ok(await page.locator('#hudProgressBar').isHidden(), 'バーが出ている');
+    await page.evaluate(() => window.__app.startTask('hover'));
+    await page.waitForTimeout(300);
+    ok(await page.locator('#hudProgressBar').isVisible(), '課題でバーが出ない');
+  });
+
+  await t('広場は部屋より軽い (描くものが少ない)', async () => {
+    async function drawCost(id) {
+      await page.evaluate((t) => window.__app.startTask(t), id);
+      await page.waitForTimeout(300);
+      return page.evaluate(() => {
+        const B = window.__app.bench;
+        B.drawScene();
+        const t0 = performance.now();
+        for (let i = 0; i < 60; i++) B.drawScene();
+        return (performance.now() - t0) / 60;
+      });
+    }
+    const room = await drawCost('eight');
+    const field = await drawCost('free');
+    console.log('       描画 部屋 ' + room.toFixed(2) + 'ms / 広場 ' + field.toFixed(2) + 'ms');
+    ok(field < room, '広場のほうが重い (部屋 ' + room.toFixed(2) + ' / 広場 ' + field.toFixed(2) + ')');
+  });
+
+  await t('広場に地面と目印のコーンがある', async () => {
+    const r = await page.evaluate(() => {
+      const room = window.__app.app.env.room;
+      return { cones: room.furniture.filter(f => f.name === 'コーン').length, decals: room.decals.length };
+    });
+    ok(r.cones >= 12, 'コーンが足りない (' + r.cones + ' パーツ)');
+    ok(r.decals === 0, '広場に貼る板は要らない');
   });
 
   console.log('\n■ 夜モード');

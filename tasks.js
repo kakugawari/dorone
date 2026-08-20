@@ -23,6 +23,16 @@
   // ------------------------------------------------------------------
   const TASKS = [
     {
+      id: 'free',
+      name: '◎ 広場で自由に飛ぶ',
+      goal: '壁も課題もなし。好きなように動かす',
+      hint: '16m × 16m、高さ 6m。壁がないので、思いきり倒して止める練習ができます。',
+      kind: 'free',
+      field: true,
+      start: { x: 0, y: 0, z: -4.0 }, startYaw: 0,
+      limit: 3600
+    },
+    {
       id: 'hover',
       name: '① 離陸してホバリング',
       goal: '高さ 1.0m の輪の中に 10 秒とどまる',
@@ -153,6 +163,8 @@
    * アプリとテストで同じものを使うために、ここに置く。
    */
   function prepare(task, state, env, seed) {
+    // 広場の課題では、部屋ごと差し替える。壁も天井もない。
+    env.room = task.field ? Core.createField() : Core.createRoom();
     state.payload = task.payload ? Core.createPayload(task.payload.x, task.payload.z) : null;
     env.cat = task.cat ? Core.createCat(env.room, seed) : null;
     env.wind = task.wind || null;
@@ -315,7 +327,11 @@
     }
 
     // --- 課題ごとの判定 ---
-    if (task.kind === 'hover') {
+    if (task.kind === 'free') {
+      // 自由に飛ぶだけ。目標も時間切れもない。
+      return run;
+
+    } else if (task.kind === 'hover') {
       const d = Math.hypot(state.pos.x - task.target.x, state.pos.z - task.target.z);
       const dy = Math.abs(state.pos.y - task.target.y);
       const err = Math.hypot(d, dy);
@@ -442,6 +458,7 @@
   function diagnose(run, env) {
     const st = run.stats, task = run.task, notes = [];
     const room = env.room;
+    if (task.kind === 'free') return ['自由に飛んだ記録です。'];
 
     if (st.neverLeftGround) {
       notes.push('一度も浮いていません。左スティックを上に。「離陸」ボタンでも浮きます。');
@@ -524,6 +541,7 @@
   /** HUD の進み具合 (0..1)。課題ごとに意味が違う。 */
   function progressOf(run, state) {
     const task = run.task;
+    if (task.kind === 'free') return 0;
     if (task.kind === 'hover' || task.kind === 'altitude') return run.hold / task.hold;
     if (task.kind === 'gates') return run.gateIndex / task.gates.length;
     if (task.kind === 'land') {

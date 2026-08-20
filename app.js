@@ -116,7 +116,7 @@
   const els = {};
   ['view', 'hud', 'controls', 'menu', 'result', 'btnMenu', 'btnTakeoff', 'btnRetry',
     'hudTaskName', 'hudTaskGoal', 'hudTime', 'hudProgress', 'gaugeAlt', 'gaugeSpd',
-    'hdArrow', 'gaugeFps', 'hudToast', 'hudGauges', 'taskList', 'stickL', 'stickR',
+    'hdArrow', 'gaugeFps', 'hudToast', 'hudGauges', 'taskList', 'stickL', 'stickR', 'hudProgressBar',
     'gaugeBattery', 'batteryPct', 'batteryLeft', 'batteryFill', 'btnBattery', 'setBattery', 'btnNight',
     'setSound', 'setNight', 'nightNote', 'btnReplay', 'replay', 'replaySeek', 'replayPlay', 'replayTime',
     'replayClose', 'replayStickL', 'replayStickR', 'replayNote', 'batteryNote',
@@ -403,6 +403,7 @@
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'task-item';
+      btn.dataset.task = task.id;
       btn.innerHTML =
         '<div class="ti-body"><div class="ti-name"></div><div class="ti-goal"></div></div>' +
         '<div class="ti-stars">' + starsHTML(app.progress[task.id] || 0) + '</div>';
@@ -649,7 +650,8 @@
       furniture: 1, furnitureEdge: 'rgba(0,0,0,.32)',
       shadow: 1, glow: 0,
       ring: '255,255,255', ringOn: '126,227,164',
-      bgTop: '#131a2e', bgBottom: '#0b0e18'
+      bgTop: '#131a2e', bgBottom: '#0b0e18',
+      skyTop: '#1d2b4d', skyHorizon: '#3b4d75', ground: '#26324a', edge: 'rgba(150,180,240,.35)'
     },
     night: {
       floor: '#0a0d17', ceiling: '#070911', wallBack: '#0b0e19', wallSide: '#090b15',
@@ -658,7 +660,8 @@
       furniture: 0.26, furnitureEdge: 'rgba(150,175,235,.10)',
       shadow: 0.25, glow: 1,
       ring: '190,215,255', ringOn: '126,227,164',
-      bgTop: '#070911', bgBottom: '#04060c'
+      bgTop: '#070911', bgBottom: '#04060c',
+      skyTop: '#04060e', skyHorizon: '#0a1020', ground: '#0b1019', edge: 'rgba(150,180,240,.14)'
     }
   };
 
@@ -788,8 +791,14 @@
     // 背景 (奥の壁より遠くは見えないので、暗い下地だけ)
     const P = pal();
     const g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, P.bgTop);
-    g.addColorStop(1, P.bgBottom);
+    if (room.open) {
+      // 空。地面の向こう側は空になる。
+      g.addColorStop(0, P.skyTop);
+      g.addColorStop(1, P.skyHorizon);
+    } else {
+      g.addColorStop(0, P.bgTop);
+      g.addColorStop(1, P.bgBottom);
+    }
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
 
@@ -797,6 +806,13 @@
     const shell = [];
     const y0 = 0, y1 = room.height;
     const x0 = room.minX, x1 = room.maxX, z0 = room.minZ, z1 = room.maxZ;
+
+    if (room.open) {
+      // 広場。壁も天井もない。地面 1 枚とグリッドだけなので、部屋より軽い。
+      drawFloor(cam, room, state, task);
+      drawInterior(cam, room, state, task, override);
+      return;
+    }
 
     shell.push({ depth: 1e6, draw: function () { drawFloor(cam, room, state, task); } });
     // 天井。照明を描いてみたが、画面の上端は遠近が強くかかるので、
@@ -808,7 +824,14 @@
     shell.push({ depth: 6e5, draw: function () { drawWall(cam, [{ x: x1, y: y0, z: z1 }, { x: x1, y: y0, z: z0 }, { x: x1, y: y1, z: z0 }, { x: x1, y: y1, z: z1 }], P.wallSide); } });
     shell.forEach(function (s) { s.draw(); });
 
-    // ---- 中にあるもの。奥から順に ----
+    drawInterior(cam, room, state, task, override);
+  }
+
+  /**
+   * 中にあるもの (家具・輪・機体) を、奥から順に描く。
+   * override はリプレイ中の機体の状態。live でないときはゴーストを出さない。
+   */
+  function drawInterior(cam, room, state, task, override) {
     const items = [];
     room.furniture.forEach(function (f) { collectBox(cam, f, items); });
     if (room.decals) room.decals.forEach(function (d) { collectDecal(cam, d, items); });
@@ -892,7 +915,10 @@
     const s = state;
     const x0 = room.minX, x1 = room.maxX, z0 = room.minZ, z1 = room.maxZ;
     const P = pal();
-    poly(cam, [{ x: x0, y: 0, z: z0 }, { x: x1, y: 0, z: z0 }, { x: x1, y: 0, z: z1 }, { x: x0, y: 0, z: z1 }], P.floor);
+    const corners = [{ x: x0, y: 0, z: z0 }, { x: x1, y: 0, z: z0 }, { x: x1, y: 0, z: z1 }, { x: x0, y: 0, z: z1 }];
+    poly(cam, corners, room.open ? P.ground : P.floor);
+    // 広場の端。ここから先へは行けない、と分かるように線を引く。
+    if (room.open) strokeLoop(cam, corners, P.edge, 2);
 
     // 家具の足もとを暗くする。置いてある感じが出て、床との境目が読める。
     room.furniture.forEach(function (f) {
@@ -904,16 +930,19 @@
       ], 'rgba(0,0,0,' + (0.30 * P.shadow + 0.05).toFixed(3) + ')');
     });
 
-    // 50cm ごとのグリッド。距離感の手がかりになる。
-    // 1m ごとの線と 50cm の線で、色ごとに 1 回ずつ塗る (34 回 → 2 回)。
+    // グリッド。距離感の手がかりになる。
+    // 細い線と太い線で、色ごとに 1 回ずつ塗る (数十回 → 2 回)。
+    // 広場は部屋より広いので、間隔を倍にして線の数を同じくらいに保つ。
+    const step = room.open ? 1 : 0.5;
+    const bigEvery = step * 2;
     for (const major of [false, true]) {
       beginLines();
-      for (let x = Math.ceil(x0 * 2) / 2; x <= x1 + 1e-6; x += 0.5) {
-        if ((Math.abs(x % 1) < 0.01) !== major) continue;
+      for (let x = Math.ceil(x0 / step) * step; x <= x1 + 1e-6; x += step) {
+        if ((Math.abs(x % bigEvery) < 0.01) !== major) continue;
         addLine(cam, { x: x, y: 0.001, z: z0 }, { x: x, y: 0.001, z: z1 });
       }
-      for (let z = Math.ceil(z0 * 2) / 2; z <= z1 + 1e-6; z += 0.5) {
-        if ((Math.abs(z % 1) < 0.01) !== major) continue;
+      for (let z = Math.ceil(z0 / step) * step; z <= z1 + 1e-6; z += step) {
+        if ((Math.abs(z % bigEvery) < 0.01) !== major) continue;
         addLine(cam, { x: x0, y: 0.001, z: z }, { x: x1, y: 0.001, z: z });
       }
       strokeLines(major ? P.gridMajor : P.gridMinor, 1);
@@ -1430,10 +1459,13 @@
       : task.goal;
     els.hudTime.innerHTML = run.elapsed.toFixed(1) + '<span>s</span>';
 
+    // 枠ごと隠す。中身だけ隠すと、空の枠が残る。
+    const free = task.kind === 'free';
+    els.hudProgressBar.hidden = free;
     els.hudProgress.style.width = Math.round(clamp(T.progressOf(run, state), 0, 1) * 100) + '%';
     // 残り時間が少なくなったら色を変える
     const left = 1 - run.elapsed / task.limit;
-    els.hudProgress.classList.toggle('warn', left < 0.25);
+    els.hudProgress.classList.toggle('warn', !free && left < 0.25);
 
     els.hudGauges.hidden = !app.settings.assist;
     if (app.settings.assist) {
@@ -1509,6 +1541,14 @@
       if (app.state.crashed && !lastCrashed) {
         lastCrashed = true;
         toastBad(app.state.crashReason);
+        if (app.run.task.kind === 'free') {
+          // 広場では止めない。少し待って置きなおす。
+          // どの走行に向けた予約かを覚えておき、入れかわっていたら何もしない。
+          const forRun = app.run;
+          setTimeout(function () {
+            if (app.run === forRun && app.screen === 'flight') startTask('free');
+          }, 1800);
+        }
       }
       if (app.run.finished) {
         app.paused = true;

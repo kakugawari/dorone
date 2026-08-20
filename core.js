@@ -236,6 +236,45 @@
     };
   }
 
+  /**
+   * 広場。壁も天井もない、開けた練習場。
+   * 部屋 (createRoom) と同じ形の入れ物を返すが、open: true が付く。
+   * open のときは、端と上に当たっても墜落せず、そっと止まるだけ。
+   *
+   * 見た目の重さは部屋より軽い。壁 3 枚・天井・家具 30 パーツを描かなくなり、
+   * 代わりに地面 1 枚とパイロン (三角コーン) だけになる。
+   */
+  function createField() {
+    const furniture = [];
+    const add = function () { furniture.push(part.apply(null, arguments)); };
+
+    // 三角コーン。距離をつかむ手がかりと、スラロームの目印を兼ねる。
+    // 「どのくらい離れているか」が分からないと、広い所では練習にならない。
+    // 千鳥に置く。一直線に並べると、操縦者から見て重なって
+    // 「トーテムポール」に見えてしまう。ジグザグに抜ける練習にもなる。
+    const cones = [
+      [-1.7, -2.0], [1.7, 0.4], [-1.7, 2.8], [1.7, 5.2],
+      [-4.6, 1.6], [4.6, 1.6], [0, 7.2]
+    ];
+    for (const [cx, cz] of cones) {
+      add('コーン', cx - 0.17, 0, cz - 0.17, cx + 0.17, 0.05, cz + 0.17, '#8a4a2a');   // 台
+      add('コーン', cx - 0.11, 0.05, cz - 0.11, cx + 0.11, 0.34, cz + 0.11, '#c25a2a'); // 下
+      add('コーン', cx - 0.06, 0.34, cz - 0.06, cx + 0.06, 0.58, cz + 0.06, '#e07a3a'); // 上
+    }
+
+    return {
+      open: true,
+      minX: -8, maxX: 8,
+      minZ: -8, maxZ: 8,
+      // 上限 6m。これ以上あげると機体が数画素になって、何をしているか読めない。
+      // (部屋は 2.4m なので、それでも 2.5 倍の高さがある)
+      height: 6,
+      pilot: { x: 0, y: 1.55, z: -6.5 },
+      furniture: furniture,
+      decals: []
+    };
+  }
+
   // ------------------------------------------------------------------
   // 機体の状態
   // ------------------------------------------------------------------
@@ -254,6 +293,7 @@
       throttleVis: 0,    // プロペラの見た目の勢い
       flying: false,
       airborne: false,          // 一度でもしっかり浮いたか。着地判定に使う
+      atLimit: false,           // 広場の端や上限に当たっている
       crashed: false,
       crashReason: '',
       landed: false,
@@ -637,15 +677,18 @@
       state.vel.z *= 0.15;
     }
 
-    // --- 天井 ---
+    // --- 天井 (広場では「これ以上は上がれない高さ」。当たっても落ちない) ---
+    const soft = !!room.open;
     if (state.pos.y + hh >= room.height) {
       const vy = state.vel.y;
       state.pos.y = room.height - hh;
-      if (vy > config.crashSpeed) { crash(state, '天井にぶつかりました'); return; }
+      if (!soft && vy > config.crashSpeed) { crash(state, '天井にぶつかりました'); return; }
       state.vel.y = Math.min(0, state.vel.y);
+      state.atLimit = true;
     }
 
     // --- 壁 ---
+    state.atLimit = false;
     const walls = [
       { hit: state.pos.x - r <= room.minX, set: () => { state.pos.x = room.minX + r; }, v: () => state.vel.x, zero: () => { state.vel.x = Math.max(0, state.vel.x); }, sign: -1, name: '左の壁' },
       { hit: state.pos.x + r >= room.maxX, set: () => { state.pos.x = room.maxX - r; }, v: () => state.vel.x, zero: () => { state.vel.x = Math.min(0, state.vel.x); }, sign: 1, name: '右の壁' },
@@ -656,8 +699,9 @@
       if (!w.hit) continue;
       const approach = w.v() * w.sign;
       w.set();
-      if (approach > config.crashSpeed) { crash(state, w.name + 'にぶつかりました'); return; }
+      if (!soft && approach > config.crashSpeed) { crash(state, w.name + 'にぶつかりました'); return; }
       w.zero();
+      state.atLimit = true;
     }
 
     // --- 家具 (球 vs AABB) ---
@@ -886,7 +930,7 @@
     DEG, TAU, NEAR,
     mulberry32, clamp, wrapPi, approachK, dist2,
     DEFAULT_CONFIG, makeConfig, randomizeDrift,
-    part, decalX, bookSpines, createRoom, createState, step, driftAt, throttleToThrust, headingVectors, closestOnBox,
+    part, decalX, bookSpines, createRoom, createField, createState, step, driftAt, throttleToThrust, headingVectors, closestOnBox,
     createPayload, updatePayload, createCat, updateCat,
     batteryLoad, batterySeconds, audioParams,
     makeCamera, worldToView, projectView, projectPoint, projectPolygon,
