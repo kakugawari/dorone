@@ -133,16 +133,20 @@
       limit: 150
     },
     {
-      id: 'cat',
-      name: '⑩ 猫がいる部屋で',
-      goal: '猫に落とされずに 15 秒ホバリング',
-      hint: '低いところを飛ぶと猫が寄ってきます。高さを保てば手は出せません。',
+      id: 'night',
+      name: '⑩ 暗い部屋で',
+      goal: '灯りを消して、機首をこちらに向けたまま 15 秒',
+      hint: '前が白、後ろが赤。LED の色だけで向きを読みます。補助表示を切ると本番と同じ。',
       kind: 'hover',
-      start: { x: -0.6, y: 0, z: 1.4 }, startYaw: 0,
-      target: { x: -0.6, y: 1.35, z: 1.4 },
-      radius: 0.70, band: 0.32, hold: 15, limit: 110,
-      cat: true
+      start: { x: 0, y: 0, z: 2.0 }, startYaw: Math.PI,
+      target: { x: 0, y: 1.25, z: 2.0 },
+      radius: 0.75, band: 0.35, hold: 15, limit: 110,
+      faceCamera: true, faceTolDeg: 40,
+      night: true
     }
+    // 猫 (⑩ 猫がいる部屋で) はいったん外している。
+    // 物理は core.js の createCat / updateCat に残してあり、テストも通っている。
+    // 戻すときは、ここに task を足して cat: true を付けるだけでよい。
   ];
 
   function findTask(id) {

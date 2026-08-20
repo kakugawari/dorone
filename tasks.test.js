@@ -153,7 +153,7 @@ test('テーブルの下は、機体が通れるだけ空いている', () => {
 
 // ---------------------------------------------------------------- クリアできるか
 
-for (const id of ['hover', 'altitude', 'box', 'nose', 'land', 'wind', 'eight', 'under', 'carry', 'cat']) {
+for (const id of ['hover', 'altitude', 'box', 'nose', 'land', 'wind', 'eight', 'under', 'carry', 'night']) {
   test('「' + T.findTask(id).name + '」は上手に飛べばクリアできる', () => {
     const failures = [];
     for (const seed of [1, 2, 3]) {

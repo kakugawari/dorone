@@ -687,23 +687,12 @@ async function screenHash(page) {
     ok(r.peak > 0.02, '吊っているのに一度も揺れていない (最大 ' + r.peak.toFixed(3) + 'm)');
   });
 
-  await t('猫の課題では猫が出て、動きまわる', async () => {
-    await page.evaluate(() => window.__app.startTask('cat'));
-    await page.waitForTimeout(250);
-    const a = await page.evaluate(() => { const c = window.__app.app.env.cat; return c && { x: c.x, z: c.z }; });
-    ok(a, '猫がいない');
-    await page.evaluate(() => window.__app.simulate(8, (s) => ({ throttle: s.pos.y < 1.35 ? 0.7 : 0, yaw: 0, pitch: 0, roll: 0 })));
-    await page.waitForTimeout(200);
-    const b = await page.evaluate(() => { const c = window.__app.app.env.cat; return { x: c.x, z: c.z, mood: c.mood }; });
-    ok(Math.hypot(b.x - a.x, b.z - a.z) > 0.15, '猫が動いていない');
-    ok(b.mood < 0.4, '高く飛んでいるのに猫が狙ってきた (' + b.mood.toFixed(2) + ')');
-  });
-
-  await t('猫の課題以外では猫は出ない', async () => {
+  await t('課題が変わると、荷物などは持ちこされない', async () => {
     await page.evaluate(() => window.__app.startTask('hover'));
     await page.waitForTimeout(200);
     ok(await page.evaluate(() => !window.__app.app.env.cat), '猫が残っている');
     ok(await page.evaluate(() => !window.__app.state().payload), '荷物が残っている');
+    ok(await page.evaluate(() => !window.__app.app.env.wind), '風が残っている');
   });
 
   await t('テーブルの下をくぐる課題が、画面でも成立する', async () => {
@@ -727,10 +716,139 @@ async function screenHash(page) {
     ok(r.success, 'くぐれなかった (ゲート ' + r.gates + ' / ' + r.why + ')');
   });
 
+  console.log('\n■ 夜モード');
+
+  /**
+   * 画面の明るさと、赤/白の灯りの量を測る。
+   * 灯りは数十画素しかないので、間引くと見落とす。全部の画素を見る。
+   */
+  async function lightStats(page) {
+    return page.evaluate(() => {
+      const cv = document.getElementById('view');
+      const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+      let sum = 0, n = 0, red = 0, white = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+        if ((i >> 2) % 13 === 0) { sum += r + g + b; n++; }
+        if (r > 130 && r > g + 60 && r > b + 60) red++;
+        if (r > 190 && g > 200 && b > 210) white++;
+      }
+      return { avg: sum / n, red: red, white: white };
+    });
+  }
+
+  await t('⑩ は暗い部屋になる。明るい課題よりはっきり暗い', async () => {
+    await page.evaluate(() => { window.__app.app.settings.night = 0; window.__app.startTask('nose'); });
+    await page.waitForTimeout(300);
+    await page.evaluate(() => window.__app.simulate(3, (s) => ({ throttle: s.pos.y < 1.2 ? 0.7 : 0, yaw: 0, pitch: 0, roll: 0 })));
+    await page.waitForTimeout(250);
+    const day = await lightStats(page);
+
+    await page.evaluate(() => window.__app.startTask('night'));
+    await page.waitForTimeout(300);
+    ok(await page.evaluate(() => window.__app.isNight()), '夜になっていない');
+    await page.evaluate(() => window.__app.simulate(3, (s) => ({ throttle: s.pos.y < 1.2 ? 0.7 : 0, yaw: 0, pitch: 0, roll: 0 })));
+    await page.waitForTimeout(250);
+    const night = await lightStats(page);
+
+    console.log('       明るさ 昼 ' + day.avg.toFixed(0) + ' / 夜 ' + night.avg.toFixed(0));
+    ok(night.avg < day.avg * 0.65, '夜のほうが暗くない (' + day.avg.toFixed(0) + ' -> ' + night.avg.toFixed(0) + ')');
+    ok(night.avg > 3, '真っ暗すぎて何も見えない (' + night.avg.toFixed(1) + ')');
+  });
+
+  await t('暗くても、機体の LED は見える', async () => {
+    const s = await lightStats(page);
+    ok(s.white > 15, '白い灯りが見えない (' + s.white + ' 画素)');
+  });
+
+  await t('後ろを向けると赤い灯りが見える (前が白・後ろが赤)', async () => {
+    // 機首を奥に向ける = 操縦者からは後ろ (赤) が見える
+    const away = await page.evaluate(async () => {
+      const app = window.__app.app;
+      app.state.yaw = 0;
+      window.__app.bench.drawScene();
+      return true;
+    }) && await lightStats(page);
+    // 機首をこちらに向ける = 前 (白) が見える
+    const toward = await page.evaluate(async () => {
+      const app = window.__app.app;
+      app.state.yaw = Math.PI;
+      window.__app.bench.drawScene();
+      return true;
+    }) && await lightStats(page);
+    ok(away.red > toward.red + 5, '後ろを向けても赤が増えない (' + away.red + ' vs ' + toward.red + ')');
+    ok(toward.white > away.white + 5, '前を向けても白が増えない (' + toward.white + ' vs ' + away.white + ')');
+  });
+
+  await t('設定で暗くすると、どの課題でも夜になる。戻せる', async () => {
+    await page.locator('#btnMenu').tap();
+    await page.waitForTimeout(200);
+    await page.locator('#setNight button[data-v="1"]').tap();
+    await page.waitForTimeout(150);
+    await page.evaluate(() => window.__app.startTask('hover'));
+    await page.waitForTimeout(300);
+    ok(await page.evaluate(() => window.__app.isNight()), '設定が効いていない');
+    const dark = await lightStats(page);
+
+    await page.locator('#btnMenu').tap();
+    await page.waitForTimeout(200);
+    await page.locator('#setNight button[data-v="0"]').tap();
+    await page.waitForTimeout(150);
+    await page.evaluate(() => window.__app.startTask('hover'));
+    await page.waitForTimeout(300);
+    ok(!await page.evaluate(() => window.__app.isNight()), '明るいに戻らない');
+    ok((await lightStats(page)).avg > dark.avg * 1.4, '明るくならない');
+  });
+
+  await t('影は 1 枚のべた塗りでなく、高いほど広がる', async () => {
+    async function shadowWidth(y) {
+      return page.evaluate((h) => {
+        const C = window.Core, app = window.__app.app;
+        app.settings.night = 0; app.night = false;
+        app.state.pos = { x: 0, y: h, z: 2.0 };
+        app.state.vel = { x: 0, y: 0, z: 0 };
+        app.state.flying = true;
+        app.cam.yaw = 0; app.cam.pitch = -0.35;
+        window.__app.bench.drawScene();
+        const foot = C.projectPoint(app.cam, { x: 0, y: 0.008, z: 2.0 });
+        const cv = document.getElementById('view');
+        const sc = window.__app.renderScale();
+        const row = Math.round(foot.y * sc);
+        const d = cv.getContext('2d').getImageData(0, row, cv.width, 1).data;
+        // その行の端 (影のない床) を基準に、それより暗い画素の幅を数える
+        const floor = d[0] + d[1] + d[2];
+        let n = 0;
+        for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] < floor * 0.97) n++;
+        return n;
+      }, y);
+    }
+    const low = await shadowWidth(0.25);
+    const mid = await shadowWidth(1.0);
+    const high = await shadowWidth(1.8);
+    ok(low > 20, '影が見えない');
+    ok(mid > low && high > mid, '高くしても影が広がらない (' + low + ' / ' + mid + ' / ' + high + ')');
+  });
+
   console.log('\n■ リプレイとゴースト');
 
   await t('飛び終わったあと、リプレイを開ける', async () => {
-    await page.waitForSelector('#result:not([hidden])', { timeout: 4000 });
+    // この節だけで完結させる。前の節がどこで終わっていても動くように。
+    await page.evaluate(() => {
+      const C = window.Core;
+      window.__app.app.settings.night = 0;
+      window.__app.startTask('box');
+      window.__app.simulate(120, (s, run) => {
+        const g = run.task.gates[Math.min(run.gateIndex, run.task.gates.length - 1)];
+        const ex = g.x - s.pos.x, ez = g.z - s.pos.z;
+        const ax = 0.9 * ex - 1.5 * s.vel.x, az = 0.9 * ez - 1.5 * s.vel.z;
+        const h = C.headingVectors(s.yaw);
+        let th = C.clamp((g.y - s.pos.y) * 1.6 - s.vel.y * 0.5, -1, 1);
+        if (!s.flying && !s.airborne) th = Math.max(th, 0.5);
+        return { throttle: th, yaw: 0, pitch: C.clamp(ax * h.fwd.x + az * h.fwd.z, -1, 1),
+                 roll: C.clamp(ax * h.right.x + az * h.right.z, -1, 1) };
+      });
+    });
+    await page.waitForSelector('#result:not([hidden])', { timeout: 5000 });
     await page.locator('#btnReplay').tap();
     await page.waitForTimeout(400);
     ok(await page.locator('#replay').isVisible(), 'リプレイ画面が出ない');
@@ -878,11 +996,11 @@ async function screenHash(page) {
 
   await t('クリアするとゴーストが残り、次の走行で並走する', async () => {
     const saved = await page.evaluate(() => {
-      // ひとつ前の走行 (くぐる) はクリアしている
-      return !!JSON.parse(localStorage.getItem('dorone.ghost.v1.under') || 'null');
+      // この節の最初にクリアした ③ のゴーストが残っているはず
+      return !!JSON.parse(localStorage.getItem('dorone.ghost.v1.box') || 'null');
     });
     ok(saved, 'ゴーストが保存されていない');
-    await page.evaluate(() => window.__app.startTask('under'));
+    await page.evaluate(() => window.__app.startTask('box'));
     await page.waitForTimeout(250);
     const g = await page.evaluate(() => {
       const gh = window.__app.ghost();

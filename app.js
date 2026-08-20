@@ -90,10 +90,11 @@
   // ---------------------------------------------------------------- 状態
   const app = {
     screen: 'menu',
-    settings: loadJSON(SETTINGS_KEY, { mode: 2, difficulty: 1, altHold: 1, assist: 1, battery: 1, sound: 1 }),
+    settings: loadJSON(SETTINGS_KEY, { mode: 2, difficulty: 1, altHold: 1, assist: 1, battery: 1, sound: 1, night: 0 }),
     progress: loadJSON(PROGRESS_KEY, {}),
     battery: 1,
     ghost: null,
+    night: false,
     taskId: 'hover',
     run: null,
     state: null,
@@ -117,7 +118,7 @@
     'hudTaskName', 'hudTaskGoal', 'hudTime', 'hudProgress', 'gaugeAlt', 'gaugeSpd',
     'hdArrow', 'gaugeFps', 'hudToast', 'hudGauges', 'taskList', 'stickL', 'stickR',
     'gaugeBattery', 'batteryPct', 'batteryLeft', 'batteryFill', 'btnBattery', 'setBattery',
-    'setSound', 'btnReplay', 'replay', 'replayCanvas', 'replaySeek', 'replayPlay', 'replayTime',
+    'setSound', 'setNight', 'nightNote', 'btnReplay', 'replay', 'replaySeek', 'replayPlay', 'replayTime',
     'replayClose', 'replayStickL', 'replayStickR', 'replayNote', 'batteryNote',
     'knobL', 'knobR', 'labelL', 'labelR', 'resVerdict', 'resStars', 'resMsg',
     'resScores', 'resNotes', 'chartTop', 'chartAlt', 'btnResRetry', 'btnResNext',
@@ -256,6 +257,7 @@
     T.prepare(task, app.state, app.env, seed);
     app.run = T.createRun(task.id, seed);
     app.ghost = loadGhost(task.id);
+    app.night = !!(task.night || app.settings.night);
     lastCrashed = false;
 
     // 高度維持オフのときは、スロットルのスティックは戻らない (実機の送信機と同じ)
@@ -621,7 +623,32 @@
   window.addEventListener('resize', resize);
   window.addEventListener('orientationchange', function () { setTimeout(resize, 220); });
 
-  const P = { room: null };
+  /**
+   * 昼と夜の色。夜は「部屋の灯りを消した」状態。
+   * 実機でも暗いところでは LED の色でしか向きが分からない。そこを練習する。
+   */
+  const PALETTE = {
+    day: {
+      floor: '#20283f', ceiling: '#171d31', wallBack: '#1c2338', wallSide: '#1a2134',
+      gridMinor: 'rgba(150,175,230,.07)', gridMajor: 'rgba(150,175,230,.16)',
+      skirting: 'rgba(255,255,255,.10)',
+      furniture: 1, furnitureEdge: 'rgba(0,0,0,.32)',
+      shadow: 1, glow: 0,
+      ring: '255,255,255', ringOn: '126,227,164',
+      bgTop: '#131a2e', bgBottom: '#0b0e18'
+    },
+    night: {
+      floor: '#0a0d17', ceiling: '#070911', wallBack: '#0b0e19', wallSide: '#090b15',
+      gridMinor: 'rgba(120,150,215,.025)', gridMajor: 'rgba(120,150,215,.055)',
+      skirting: 'rgba(255,255,255,.035)',
+      furniture: 0.26, furnitureEdge: 'rgba(150,175,235,.10)',
+      shadow: 0.25, glow: 1,
+      ring: '190,215,255', ringOn: '126,227,164',
+      bgTop: '#070911', bgBottom: '#04060c'
+    }
+  };
+
+  function pal() { return app.night ? PALETTE.night : PALETTE.day; }
 
   /** 世界の多角形を塗る。手前の面で切ってから描く。 */
   function poly(cam, pts, fill, stroke, lw) {
@@ -704,9 +731,10 @@
     const W = els.view.width, H = els.view.height;
 
     // 背景 (奥の壁より遠くは見えないので、暗い下地だけ)
+    const P = pal();
     const g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, '#131a2e');
-    g.addColorStop(1, '#0b0e18');
+    g.addColorStop(0, P.bgTop);
+    g.addColorStop(1, P.bgBottom);
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
 
@@ -718,11 +746,11 @@
     shell.push({ depth: 1e6, draw: function () { drawFloor(cam, room, state, task); } });
     // 天井。照明を描いてみたが、画面の上端は遠近が強くかかるので、
     // 四角い光がゆがんで「描画の失敗」に見えた。素のままにしておく。
-    shell.push({ depth: 9e5, draw: function () { poly(cam, [{ x: x0, y: y1, z: z0 }, { x: x1, y: y1, z: z0 }, { x: x1, y: y1, z: z1 }, { x: x0, y: y1, z: z1 }], '#171d31'); } });
+    shell.push({ depth: 9e5, draw: function () { poly(cam, [{ x: x0, y: y1, z: z0 }, { x: x1, y: y1, z: z0 }, { x: x1, y: y1, z: z1 }, { x: x0, y: y1, z: z1 }], P.ceiling); } });
     // 壁。奥ほど暗くして奥行きを出す。
-    shell.push({ depth: 8e5, draw: function () { drawWall(cam, [{ x: x0, y: y0, z: z1 }, { x: x1, y: y0, z: z1 }, { x: x1, y: y1, z: z1 }, { x: x0, y: y1, z: z1 }], '#1c2338', 'z', z1); } });
-    shell.push({ depth: 7e5, draw: function () { drawWall(cam, [{ x: x0, y: y0, z: z0 }, { x: x0, y: y0, z: z1 }, { x: x0, y: y1, z: z1 }, { x: x0, y: y1, z: z0 }], '#1a2134', 'x', x0); } });
-    shell.push({ depth: 6e5, draw: function () { drawWall(cam, [{ x: x1, y: y0, z: z1 }, { x: x1, y: y0, z: z0 }, { x: x1, y: y1, z: z0 }, { x: x1, y: y1, z: z1 }], '#1a2134', 'x', x1); } });
+    shell.push({ depth: 8e5, draw: function () { drawWall(cam, [{ x: x0, y: y0, z: z1 }, { x: x1, y: y0, z: z1 }, { x: x1, y: y1, z: z1 }, { x: x0, y: y1, z: z1 }], P.wallBack); } });
+    shell.push({ depth: 7e5, draw: function () { drawWall(cam, [{ x: x0, y: y0, z: z0 }, { x: x0, y: y0, z: z1 }, { x: x0, y: y1, z: z1 }, { x: x0, y: y1, z: z0 }], P.wallSide); } });
+    shell.push({ depth: 6e5, draw: function () { drawWall(cam, [{ x: x1, y: y0, z: z1 }, { x: x1, y: y0, z: z0 }, { x: x1, y: y1, z: z0 }, { x: x1, y: y1, z: z1 }], P.wallSide); } });
     shell.forEach(function (s) { s.draw(); });
 
     // ---- 中にあるもの。奥から順に ----
@@ -748,17 +776,27 @@
     items.forEach(function (it) { it.draw(); });
   }
 
-  function drawWall(cam, pts, base, axis, v) {
+  function drawWall(cam, pts, base) {
     poly(cam, pts, base);
     // 巾木で床との境目を出す。境目が見えないと高さが読めない。
-    const lo = pts.slice(0, 2);
-    line3(cam, lo[0], lo[1], 'rgba(255,255,255,.10)', 1.5);
+    line3(cam, pts[0], pts[1], pal().skirting, 1.5);
   }
 
   function drawFloor(cam, room, state, task) {
     const s = state;
     const x0 = room.minX, x1 = room.maxX, z0 = room.minZ, z1 = room.maxZ;
-    poly(cam, [{ x: x0, y: 0, z: z0 }, { x: x1, y: 0, z: z0 }, { x: x1, y: 0, z: z1 }, { x: x0, y: 0, z: z1 }], '#20283f');
+    const P = pal();
+    poly(cam, [{ x: x0, y: 0, z: z0 }, { x: x1, y: 0, z: z0 }, { x: x1, y: 0, z: z1 }, { x: x0, y: 0, z: z1 }], P.floor);
+
+    // 家具の足もとを暗くする。置いてある感じが出て、床との境目が読める。
+    room.furniture.forEach(function (f) {
+      if (f.min.y > 0.02) return;                      // 浮いているもの (天板) は除く
+      const m = 0.07;
+      poly(cam, [
+        { x: f.min.x - m, y: 0.002, z: f.min.z - m }, { x: f.max.x + m, y: 0.002, z: f.min.z - m },
+        { x: f.max.x + m, y: 0.002, z: f.max.z + m }, { x: f.min.x - m, y: 0.002, z: f.max.z + m }
+      ], 'rgba(0,0,0,' + (0.30 * P.shadow + 0.05).toFixed(3) + ')');
+    });
 
     // 50cm ごとのグリッド。距離感の手がかりになる。
     // 1m ごとの線と 50cm の線で、色ごとに 1 回ずつ塗る (34 回 → 2 回)。
@@ -772,7 +810,7 @@
         if ((Math.abs(z % 1) < 0.01) !== major) continue;
         addLine(cam, { x: x0, y: 0.001, z: z }, { x: x1, y: 0.001, z: z });
       }
-      strokeLines(major ? 'rgba(150,175,230,.16)' : 'rgba(150,175,230,.07)', 1);
+      strokeLines(major ? P.gridMajor : P.gridMinor, 1);
     }
 
     // 着陸マット / 荷物を置く台
@@ -823,11 +861,29 @@
    * 機体が家具の手前にいるのに影だけ家具の裏に回ってしまう。
    */
   function drawFootMarks(cam, state) {
-    // 影。**高さを読む唯一の手がかり**なので必ず描く。
+    const P = pal();
     const h = Math.max(0, state.pos.y);
+
+    // 夜は、機体の LED が足もとの床をぼんやり照らす。
+    // 暗いと影が見えないので、これが高さを読む手がかりになる。
+    if (P.glow) {
+      const lr = 0.42 + h * 0.42;
+      for (let i = 3; i >= 1; i--) {
+        const k = i / 3;
+        poly(cam, C.circlePoints(state.pos.x, 0.004, state.pos.z, lr * k, 18),
+          'rgba(150,190,255,' + (0.055 / k * Math.max(0.15, 1 - h * 0.32)).toFixed(3) + ')');
+      }
+    }
+
+    // 影。**高さを読む唯一の手がかり**なので必ず描く。
+    // 高いほど大きく、ぼやける。1 枚のべた塗りだと切り抜きに見える。
     const r = 0.20 + h * 0.075;
-    const alpha = Math.max(0.06, 0.42 - h * 0.13);
-    poly(cam, C.circlePoints(state.pos.x, 0.008, state.pos.z, r, 20), 'rgba(0,0,0,' + alpha.toFixed(3) + ')');
+    const base = Math.max(0.06, 0.42 - h * 0.13) * P.shadow;
+    for (let i = 0; i < 3; i++) {
+      const k = 1 + i * 0.36 * Math.min(1, 0.3 + h * 0.5);   // 高いほど外へ広がる
+      poly(cam, C.circlePoints(state.pos.x, 0.008, state.pos.z, r * k, 18),
+        'rgba(0,0,0,' + (base * 0.42).toFixed(3) + ')');
+    }
 
     if (!app.settings.assist) return;
     // 機首がどちらを向いているかを床に出す。
@@ -862,7 +918,10 @@
       if (!pr) return;
       out.push({
         depth: pr.depth,
-        draw: function () { poly(cam, pts, shadeColor(box.color, f.shade), 'rgba(0,0,0,.32)', 1); }
+        draw: function () {
+          const P = pal();
+          poly(cam, pts, shadeColor(box.color, f.shade * P.furniture), P.furnitureEdge, 1);
+        }
       });
     });
   }
@@ -879,7 +938,8 @@
     if (task.kind === 'hover') {
       const t = task.target;
       const inZone = run.inZone;
-      const col = inZone ? 'rgba(126,227,164,' : 'rgba(255,255,255,';
+      const P = pal();
+      const col = 'rgba(' + (inZone ? P.ringOn : P.ring) + ',';
       // 上下の帯を 3 本の輪で示す = 「この筒の中にいろ」
       [[t.y - task.band, 0.30], [t.y, 0.85], [t.y + task.band, 0.30]].forEach(function (lv) {
         const pts = C.circlePoints(t.x, lv[0], t.z, task.radius, 30);
@@ -903,7 +963,8 @@
                      { x: room.maxX, y: y, z: room.maxZ }, { x: room.minX, y: y, z: room.maxZ }];
         const pr = C.projectPolygon(cam, pts);
         if (!pr) return;
-        const col = run.inZone ? 'rgba(126,227,164,' : 'rgba(255,255,255,';
+        const P = pal();
+        const col = 'rgba(' + (run.inZone ? P.ringOn : P.ring) + ',';
         out.push({ depth: pr.depth, draw: function () { strokeLoop(cam, pts, col + lv[1] + ')', lv[1] > 0.5 ? 2 : 1); } });
       });
     } else if (task.kind === 'gates') {
@@ -952,7 +1013,8 @@
       const b = bw(state, m.x, -0.004, m.z);
       return [{ x: a.x, y: a.y, z: a.z }, { x: b.x, y: b.y, z: b.z }];
     });
-    for (const pass of [['#20242e', 5], ['#3a4152', 2.5]]) {
+    const armDark = pal().glow ? 0.4 : 1;
+    for (const pass of [[shadeColor('#20242e', armDark), 5], [shadeColor('#3a4152', armDark), 2.5]]) {
       beginLines();
       arms.forEach(function (a) { addLine(cam, a[0], a[1]); });
       strokeLines(pass[0], pass[1]);
@@ -972,18 +1034,78 @@
       { i: [0, 3, 7, 4], c: '#232833' },  // 左
       { i: [0, 1, 2, 3], c: '#39404f' }   // 上
     ];
+    const nightK = pal().glow ? 0.42 : 1;
     bodyFaces.forEach(function (f) {
-      poly(cam, f.i.map(function (i) { return corners[i]; }), f.c, 'rgba(0,0,0,.4)', 1);
+      poly(cam, f.i.map(function (i) { return corners[i]; }), shadeColor(f.c, nightK), 'rgba(0,0,0,.4)', 1);
     });
 
-    // 前を向いている印。青い LED。これが無いと機首が分からない。
-    const led = [
-      bw(state, -bodyW * 0.8, bodyH * 0.15, bodyL * 1.02),
-      bw(state, bodyW * 0.8, bodyH * 0.15, bodyL * 1.02),
-      bw(state, bodyW * 0.8, -bodyH * 0.5, bodyL * 1.02),
-      bw(state, -bodyW * 0.8, -bodyH * 0.5, bodyL * 1.02)
-    ].map(function (p) { return { x: p.x, y: p.y, z: p.z }; });
-    poly(cam, led, '#4fc3ff');
+    // 航法灯。**前が白、後ろが赤。** 実機と同じ決まりで、暗いところでは
+    // これだけが向きの手がかりになる。
+    //
+    // 灯りは機体の前面と後面に付いている。裏側のものまで描くと、
+    // どちらを向いていても赤と白が両方見えてしまい、向きが読めなくなる。
+    // カメラに向いている側だけを光らせる。
+    const noseW = bw(state, 0, 0, 1);
+    const nx = noseW.x - state.pos.x, ny = noseW.y - state.pos.y, nz = noseW.z - state.pos.z;
+    let cx = cam.pos.x - state.pos.x, cy2 = cam.pos.y - state.pos.y, cz = cam.pos.z - state.pos.z;
+    const cl = Math.hypot(cx, cy2, cz) || 1;
+    cx /= cl; cy2 /= cl; cz /= cl;
+    const toward = nx * cx + ny * cy2 + nz * cz;        // +1 = 機首がこちら
+    const frontVis = clamp((toward + 0.30) / 0.85, 0, 1);
+    const rearVis = clamp((-toward + 0.30) / 0.85, 0, 1);
+
+    function ledStrip(zSign, rgb, vis) {
+      if (vis < 0.03) return;
+      const z = bodyL * 1.02 * zSign;
+      const pts = [
+        bw(state, -bodyW * 0.8, bodyH * 0.15, z),
+        bw(state, bodyW * 0.8, bodyH * 0.15, z),
+        bw(state, bodyW * 0.8, -bodyH * 0.5, z),
+        bw(state, -bodyW * 0.8, -bodyH * 0.5, z)
+      ].map(function (p) { return { x: p.x, y: p.y, z: p.z }; });
+      poly(cam, pts, 'rgba(' + rgb + ',' + vis.toFixed(3) + ')');
+    }
+    ledStrip(1, '223,242,255', frontVis);
+    ledStrip(-1, '255,77,85', rearVis);
+
+    // モーターの根もとにも小さな灯り (前 2 つが白、後ろ 2 つが赤)
+    const lamps = motors.map(function (m) {
+      return {
+        p: bw(state, m.x, 0.016, m.z),
+        rgb: m.front ? '223,242,255' : '255,77,85',
+        vis: m.front ? frontVis : rearVis
+      };
+    });
+    lamps.forEach(function (l) {
+      if (l.vis < 0.05) return;
+      const s = C.projectPoint(cam, l.p);
+      if (!s) return;
+      const f = C.focalLength(cam) / s.z;
+      ctx.fillStyle = 'rgba(' + l.rgb + ',' + l.vis.toFixed(3) + ')';
+      ctx.beginPath(); ctx.arc(s.x * dpr, s.y * dpr, Math.max(1, 0.013 * f) * dpr, 0, Math.PI * 2); ctx.fill();
+    });
+
+    // 暗いところでは、灯りのまわりがにじむ
+    if (pal().glow) {
+      const halos = lamps.concat([
+        { p: bw(state, 0, 0, bodyL * 1.02), rgb: '190,225,255', vis: frontVis },
+        { p: bw(state, 0, 0, -bodyL * 1.02), rgb: '255,90,100', vis: rearVis }
+      ]);
+      halos.forEach(function (l) {
+        if (l.vis < 0.05) return;
+        const s = C.projectPoint(cam, l.p);
+        if (!s) return;
+        const f = C.focalLength(cam) / s.z;
+        // 外は薄く広く、中は濃く小さく。これをやらないと霧のように見える。
+        const core = Math.max(1.5, 0.028 * f);
+        for (let i = 3; i >= 1; i--) {
+          ctx.fillStyle = 'rgba(' + l.rgb + ',' + ([0.15, 0.07, 0.035][i - 1] * l.vis).toFixed(3) + ')';
+          ctx.beginPath();
+          ctx.arc(s.x * dpr, s.y * dpr, core * (0.55 + i * 0.62) * dpr, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      });
+    }
     // カメラの出っぱり
     const cm = bw(state, 0, -bodyH * 0.9, bodyL * 0.75);
     const cs = C.projectPoint(cam, cm);
@@ -1005,8 +1127,9 @@
         disc.push({ x: p.x, y: p.y, z: p.z });
       }
       const spinning = state.flying || state.throttleVis > 0.05;
-      poly(cam, disc, spinning ? 'rgba(180,205,255,.13)' : 'rgba(150,165,195,.05)',
-        spinning ? 'rgba(190,215,255,.30)' : 'rgba(150,165,195,.22)', 1);
+      const dk = pal().glow ? 0.22 : 1;
+      poly(cam, disc, 'rgba(180,205,255,' + ((spinning ? 0.13 : 0.05) * dk).toFixed(3) + ')',
+        'rgba(190,215,255,' + ((spinning ? 0.30 : 0.22) * dk).toFixed(3) + ')', 1);
       // 羽根
       const dir = (idx === 0 || idx === 3) ? 1 : -1;
       const phase = state.spin * dir + idx * 0.8;
@@ -1017,7 +1140,7 @@
         const p2 = bw(state, m.x - Math.cos(a) * rotR * 0.1, 0.013, m.z - Math.sin(a) * rotR * 0.1);
         addLine(cam, { x: p1.x, y: p1.y, z: p1.z }, { x: p2.x, y: p2.y, z: p2.z });
       }
-      strokeLines('rgba(215,230,255,.5)', 2);
+      strokeLines('rgba(215,230,255,' + (pal().glow ? 0.22 : 0.5) + ')', 2);
       // モーター
       const hs = C.projectPoint(cam, { x: hub.x, y: hub.y, z: hub.z });
       if (hs) {
@@ -1427,7 +1550,7 @@
 
   function syncSettingsUI() {
     [['setMode', 'mode'], ['setDifficulty', 'difficulty'], ['setAltHold', 'altHold'],
-     ['setAssist', 'assist'], ['setBattery', 'battery'], ['setSound', 'sound']]
+     ['setAssist', 'assist'], ['setBattery', 'battery'], ['setSound', 'sound'], ['setNight', 'night']]
       .forEach(function (pair) {
         const el = els[pair[0]], v = app.settings[pair[1]];
         Array.prototype.forEach.call(el.querySelectorAll('button'), function (b) {
@@ -1440,6 +1563,9 @@
     els.altHoldNote.textContent = app.settings.altHold
       ? '気圧センサーつき。スロットルを戻すとその高さで止まります。'
       : 'スロットル = 推力そのもの。中央あたりでつり合い、戻すと落ちます。スティックは戻りません。';
+    els.nightNote.textContent = app.settings.night
+      ? '灯りを消しています。前が白、後ろが赤。補助表示も切ると、実機の夜間飛行と同じになります。'
+      : '灯りを消すと、機体の LED だけが見えます。前が白、後ろが赤。向きを読む練習に。';
     els.batteryNote.textContent = app.settings.battery
       ? 'ホバリングで約 7 分。走行をまたいで持ちこします。減ったら「電池を替える」で新品に。'
       : '電池を気にせず練習します。';
@@ -1458,6 +1584,7 @@
     bindSeg(els.setAltHold, 'altHold', syncSettingsUI);
     bindSeg(els.setAssist, 'assist');
     bindSeg(els.setBattery, 'battery', syncSettingsUI);
+    bindSeg(els.setNight, 'night', syncSettingsUI);
     bindSeg(els.setSound, 'sound', function (v) { if (window.Sound) window.Sound.setMuted(!v); });
     syncSettingsUI();
 
@@ -1532,6 +1659,7 @@
       ghost: function () { return app.ghost; },
       saveGhost: saveGhost,
       setBattery: function (v) { app.battery = v; if (app.state) app.state.battery = v; },
+      isNight: function () { return app.night; },
       resize: resize,
       // 速さの計測用。どこが重いかを部品ごとに測れるようにする。
       bench: { drawScene: drawScene, renderKnobs: renderKnobs, updateHUD: updateHUD, readSticks: readSticks },
