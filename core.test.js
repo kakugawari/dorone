@@ -757,3 +757,60 @@ test('ほかのパーツに埋まって見えないパーツがない', () => {
     }
   }
 });
+
+// ---------------------------------------------------------------- 面に貼る板 (デカール)
+
+test('貼る板は当たり判定を持たない (家具ではない)', () => {
+  const room = C.createRoom();
+  assert.ok(room.decals.length > 8, '貼る板が少なすぎる: ' + room.decals.length);
+  // 家具の配列に混ざっていないこと (混ざると当たってしまう)
+  for (const d of room.decals) assert.ok(!room.furniture.includes(d));
+  // 当たるのは本棚そのもの。板の名前が出ることはない。
+  const e = env();
+  const s = C.createState({ start: { x: -1.0, y: 0.65, z: 0.7 } });
+  s.flying = true;
+  fly(s, stick({ roll: -1 }), 4, e);
+  assert.ok(s.crashed, '本棚に当たるはず (x=' + s.pos.x.toFixed(2) + ')');
+  assert.match(s.crashReason, /本棚/, '当たった相手: ' + s.crashReason);
+  // 本棚の前面より奥には入れない
+  const shelf = room.furniture.find(f => f.name === '本棚');
+  assert.ok(s.pos.x >= shelf.max.x - 0.01, '本棚をすり抜けた');
+});
+
+test('貼る板は家具の面より手前にある (埋まって見えなくならない)', () => {
+  const room = C.createRoom();
+  for (const d of room.decals) {
+    // いまはすべて x 一定の面に貼っている
+    const x = d.pts[0].x;
+    for (const p of d.pts) assert.strictEqual(p.x, x, '板が平らでない');
+    let buried = null;
+    for (const f of room.furniture) {
+      const ys = d.pts.map(p => p.y), zs = d.pts.map(p => p.z);
+      const inY = Math.min(...ys) >= f.min.y - 1e-9 && Math.max(...ys) <= f.max.y + 1e-9;
+      const inZ = Math.min(...zs) >= f.min.z - 1e-9 && Math.max(...zs) <= f.max.z + 1e-9;
+      if (inY && inZ && x > f.min.x - 1e-9 && x < f.max.x - 1e-9) buried = f.name;
+    }
+    assert.strictEqual(buried, null, '板が「' + buried + '」の中に入っていて見えない');
+  }
+});
+
+test('本の背表紙は棚の中に収まっていて、幅も高さもばらけている', () => {
+  const room = C.createRoom();
+  const shelf = room.furniture.find(f => f.name === '本棚');
+  const widths = new Set(), tops = new Set();
+  for (const d of room.decals) {
+    const zs = d.pts.map(p => p.z), ys = d.pts.map(p => p.y);
+    assert.ok(Math.min(...zs) >= shelf.min.z && Math.max(...zs) <= shelf.max.z, '本が棚からはみ出している');
+    assert.ok(Math.min(...ys) >= 0 && Math.max(...ys) <= shelf.max.y, '本が棚より高い/低い');
+    widths.add((Math.max(...zs) - Math.min(...zs)).toFixed(3));
+    tops.add(Math.max(...ys).toFixed(3));
+  }
+  assert.ok(widths.size > 5, '本の幅が同じものばかり (' + widths.size + ' 種)');
+  assert.ok(tops.size > 5, '本の高さが同じものばかり (' + tops.size + ' 種)');
+});
+
+test('本の並びは seed から決まる (毎回同じ)', () => {
+  const a = C.createRoom().decals.map(d => d.color + d.pts[0].z.toFixed(4)).join(',');
+  const b = C.createRoom().decals.map(d => d.color + d.pts[0].z.toFixed(4)).join(',');
+  assert.strictEqual(a, b);
+});

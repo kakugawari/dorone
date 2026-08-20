@@ -129,8 +129,50 @@
    * 座面・背もたれ・肘掛け、天板・脚、棚板・本 のように分けると形が読める。
    * 当たり判定もこのパーツ 1 つずつに対して行う (見た目と当たりを分けない)。
    */
+  /**
+   * 面に貼る平らな板 (デカール)。当たり判定は持たない。
+   * x が一定の面に貼る。本の背表紙のように「模様」を出すのに使う。
+   */
+  function decalX(x, y0, z0, y1, z1, color) {
+    return {
+      color: color,
+      pts: [
+        { x: x, y: y1, z: z0 }, { x: x, y: y1, z: z1 },
+        { x: x, y: y0, z: z1 }, { x: x, y: y0, z: z0 }
+      ]
+    };
+  }
+
+  const BOOK_COLORS = [
+    '#8a5a52', '#5d6b7d', '#6d7a55', '#4f6a76',
+    '#7a6a4a', '#6b4f6b', '#8a6f4a', '#57707a', '#7d5348'
+  ];
+
+  /**
+   * 棚に並ぶ本の背表紙。棚ごとに、幅と高さと色を変えて並べる。
+   * seed から決まるので毎回同じ。前の面から 5mm 手前に置いて、隠れないようにする。
+   */
+  function bookSpines(faceX, shelves, z0, z1, seed) {
+    const rng = mulberry32(seed >>> 0);
+    const out = [];
+    const x = faceX + 0.005;
+    for (const [yBottom, yTop] of shelves) {
+      const h = yTop - yBottom;
+      let z = z0 + 0.02 + rng() * 0.03;
+      while (z < z1 - 0.05) {
+        const w = 0.055 + rng() * 0.075;
+        if (z + w > z1) break;
+        const top = yBottom + h * (0.62 + rng() * 0.34);
+        out.push(decalX(x, yBottom, z, top, z + w, BOOK_COLORS[Math.floor(rng() * BOOK_COLORS.length)]));
+        z += w + 0.006 + rng() * 0.016;
+      }
+    }
+    return out;
+  }
+
   function createRoom() {
     const furniture = [];
+    const decals = [];
     const add = function () { furniture.push(part.apply(null, arguments)); };
 
     // --- ソファ (左の壁ぎわ。右を向いている) ---
@@ -157,16 +199,17 @@
     add('テレビ', 1.62, 0.57, 4.75, 2.30, 1.01, 4.81, '#1b2029');     // 画面
 
     // --- 本棚 (左の壁ぎわ、手前) ---
-    add('本棚', -2.56, 0.00, 0.10, -2.18, 1.30, 1.30, '#5a4a3a');     // 本体
-    add('本棚', -2.58, 1.30, 0.06, -2.12, 1.37, 1.34, '#6d5b48');     // 天板 (少し張り出す)
-    add('本棚', -2.56, 0.42, 0.10, -2.13, 0.47, 1.30, '#6d5b48');     // 棚板 1
-    add('本棚', -2.56, 0.84, 0.10, -2.13, 0.89, 1.30, '#6d5b48');     // 棚板 2
-    // 本は高さと幅を variedにして並べる。1 つの箱だと「板」に見える。
-    add('本', -2.53, 0.47, 0.18, -2.15, 0.79, 0.43, '#7d5a52');
-    add('本', -2.53, 0.47, 0.45, -2.15, 0.73, 0.65, '#5d6b7d');
-    add('本', -2.53, 0.47, 0.67, -2.15, 0.81, 0.90, '#6d7a55');
-    add('本', -2.53, 0.89, 0.42, -2.15, 1.19, 0.70, '#4f6a76');
-    add('本', -2.53, 0.89, 0.72, -2.15, 1.25, 0.97, '#7a6a4a');
+    // 本棚は「蓋をした 1 つの箱」。中身は箱で作らない。
+    // 小さい箱を並べると、奥から順に塗るだけの描き方では飛び出して見えるうえ、
+    // 面の数も増える。前の面に色を塗って本に見せるほうが、きれいで軽い。
+    const SHELF_FRONT = -2.18;
+    add('本棚', -2.56, 0.00, 0.10, SHELF_FRONT, 1.30, 1.30, '#5a4a3a');   // 本体 (中は空けない)
+    add('本棚', -2.58, 1.30, 0.06, -2.12, 1.37, 1.34, '#6d5b48');         // 天板 (少し張り出す)
+    add('本棚', -2.56, 0.42, 0.10, -2.13, 0.47, 1.30, '#6d5b48');         // 棚板 1
+    add('本棚', -2.56, 0.84, 0.10, -2.13, 0.89, 1.30, '#6d5b48');         // 棚板 2
+    decals.push.apply(decals, bookSpines(SHELF_FRONT, [
+      [0.06, 0.41], [0.48, 0.83], [0.90, 1.28]
+    ], 0.14, 1.26, 7));
 
     // --- 観葉植物。葉を高さと向きを変えて散らすと、それらしく見える ---
     add('植木鉢', 2.21, 0.00, 0.39, 2.35, 0.05, 0.57, '#65473a');
@@ -187,7 +230,9 @@
       height: 2.4,
       // 操縦者 (= カメラ) の立ち位置と目の高さ
       pilot: { x: 0, y: 1.55, z: -0.75 },
-      furniture: furniture
+      furniture: furniture,
+      // 面に貼るだけの板。描くが、当たり判定は持たない。
+      decals: decals
     };
   }
 
@@ -841,7 +886,7 @@
     DEG, TAU, NEAR,
     mulberry32, clamp, wrapPi, approachK, dist2,
     DEFAULT_CONFIG, makeConfig, randomizeDrift,
-    part, createRoom, createState, step, driftAt, throttleToThrust, headingVectors, closestOnBox,
+    part, decalX, bookSpines, createRoom, createState, step, driftAt, throttleToThrust, headingVectors, closestOnBox,
     createPayload, updatePayload, createCat, updateCat,
     batteryLoad, batterySeconds, audioParams,
     makeCamera, worldToView, projectView, projectPoint, projectPolygon,

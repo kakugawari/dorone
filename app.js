@@ -811,6 +811,7 @@
     // ---- 中にあるもの。奥から順に ----
     const items = [];
     room.furniture.forEach(function (f) { collectBox(cam, f, items); });
+    if (room.decals) room.decals.forEach(function (d) { collectDecal(cam, d, items); });
     collectTargets(cam, task, app.run, items);
     if (state.payload) {
       const p = state.payload;
@@ -1039,6 +1040,25 @@
           poly(cam, pts, shadeColor(box.color, f.shade * P.furniture), edged ? P.furnitureEdge : null, 1);
         }
       });
+    });
+  }
+
+  /**
+   * 面に貼るだけの板 (本の背表紙など)。1 枚の塗りだけ。ふちは描かない。
+   * 小さい箱を並べるより軽く、飛び出して見えることもない。
+   */
+  function collectDecal(cam, d, out) {
+    const pr = C.projectPolygon(cam, d.pts);
+    if (!pr) return;
+    let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+    for (const q of pr.pts) {
+      if (q.x < x0) x0 = q.x; if (q.x > x1) x1 = q.x;
+      if (q.y < y0) y0 = q.y; if (q.y > y1) y1 = q.y;
+    }
+    if ((x1 - x0) * (y1 - y0) < 4) return;
+    out.push({
+      depth: pr.depth,
+      draw: function () { poly(cam, d.pts, shadeColor(d.color, pal().furniture)); }
     });
   }
 
