@@ -714,3 +714,46 @@ test('電池が減ると音の合図が立つ', () => {
   s.battery = 0.2;
   assert.strictEqual(C.audioParams(s, e.config).lowBattery, true);
 });
+
+// ---------------------------------------------------------------- 家具の形
+
+test('家具のパーツは部屋の中に収まっている', () => {
+  const room = C.createRoom();
+  for (const f of room.furniture) {
+    assert.ok(f.min.x >= room.minX - 1e-9 && f.max.x <= room.maxX + 1e-9, f.name + ' が横にはみ出している');
+    assert.ok(f.min.z >= room.minZ - 1e-9 && f.max.z <= room.maxZ + 1e-9, f.name + ' が奥行きにはみ出している');
+    assert.ok(f.min.y >= -1e-9 && f.max.y <= room.height, f.name + ' が高さにはみ出している');
+    assert.ok(f.max.x > f.min.x && f.max.y > f.min.y && f.max.z > f.min.z, f.name + ' の大きさが 0 以下');
+  }
+});
+
+test('主な家具は箱の組み合わせでできている (1 つの箱だと何か分からない)', () => {
+  const room = C.createRoom();
+  const count = {};
+  room.furniture.forEach(function (f) { count[f.name] = (count[f.name] || 0) + 1; });
+  // ソファは座面・背もたれ・肘掛け、本棚は棚板、といった具合に分ける
+  for (const name of ['ソファ', 'テレビ台', '本棚', '観葉植物']) {
+    assert.ok((count[name] || 0) >= 3, name + ' が ' + (count[name] || 0) + ' パーツしかない');
+  }
+  assert.ok((count['テーブルの脚'] || 0) === 4, 'テーブルの脚は 4 本');
+});
+
+test('ほかのパーツに埋まって見えないパーツがない', () => {
+  // 奥から順に塗るだけなので、箱の中にすっぽり入れた箱は必ず隠れる。
+  // 棚板のように「前だけ出ている」のは正しい (それで棚に見える)。
+  // どの面からも出ていないものだけが、置き間違い。
+  const f = C.createRoom().furniture;
+  const eps = 0.005;
+  const inside = function (a, b) {   // a が b にすっぽり入っているか
+    return a.min.x >= b.min.x - eps && a.max.x <= b.max.x + eps
+      && a.min.y >= b.min.y - eps && a.max.y <= b.max.y + eps
+      && a.min.z >= b.min.z - eps && a.max.z <= b.max.z + eps;
+  };
+  for (let i = 0; i < f.length; i++) {
+    for (let j = 0; j < f.length; j++) {
+      if (i === j) continue;
+      assert.ok(!inside(f[i], f[j]),
+        '「' + f[i].name + '」が「' + f[j].name + '」の中に埋まっていて、どこからも見えない');
+    }
+  }
+});

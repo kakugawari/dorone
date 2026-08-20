@@ -578,6 +578,8 @@
    * 遅い端末では、きれいさより「なめらかさ」を取る。操作の練習では
    * 引っかかるほうが致命的なので。
    */
+  // 1 倍より下も試したが、測ったら速くならなかった (ここではラスタライズが
+  // 律速ではない)。ぼやけるだけなので入れない。
   const SCALE_STEPS = [2, 1.5, 1];
 
   function maxScale() { return Math.min(window.devicePixelRatio || 1, 2); }
@@ -1019,11 +1021,22 @@
       const pts = f.v.map(function (v) { return { x: v[0], y: v[1], z: v[2] }; });
       const pr = C.projectPolygon(cam, pts);
       if (!pr) return;
+      // 画面で数画素にしかならない面は描かない。
+      // 家具を細かい箱で作ると面の数が増えるので、ここで効いてくる。
+      let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+      for (const q of pr.pts) {
+        if (q.x < x0) x0 = q.x; if (q.x > x1) x1 = q.x;
+        if (q.y < y0) y0 = q.y; if (q.y > y1) y1 = q.y;
+      }
+      const area = (x1 - x0) * (y1 - y0);
+      if (area < 8) return;
+      // 小さい面のふち取りは見えないわりに高い。大きい面だけ描く。
+      const edged = area > 900;
       out.push({
         depth: pr.depth,
         draw: function () {
           const P = pal();
-          poly(cam, pts, shadeColor(box.color, f.shade * P.furniture), P.furnitureEdge, 1);
+          poly(cam, pts, shadeColor(box.color, f.shade * P.furniture), edged ? P.furnitureEdge : null, 1);
         }
       });
     });
