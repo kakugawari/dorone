@@ -8,8 +8,9 @@
     "test": "node --test *.test.js",
     "test:ui": "node browser-test.js",
     "test:bundle": "node tools/bundle.js && node browser-test.js --bundle",
-    "bundle": "node tools/bundle.js",
-    "test:all": "npm test && npm run test:ui && npm run test:bundle",
+    "test:artifact": "node tools/bundle.js --artifact && node browser-test.js --artifact",
+    "bundle": "node tools/bundle.js && node tools/bundle.js --artifact",
+    "test:all": "npm test && npm run test:ui && npm run test:bundle && npm run test:artifact",
     "icon": "node tools/make-icon.js"
   },
   "license": "MIT"

@@ -5,6 +5,7 @@
  *   node browser-test.js --headed   画面を出す
  *   node browser-test.js --slow     CPU を 4 倍遅くしたときも測る
  *   node browser-test.js --bundle   1 枚にまとめた版 (dist/dorone.html) を試す
+ *   node browser-test.js --artifact Artifact に出す形 (head/body を向こうが付ける) を試す
  *
  * 画面まわりの不具合はユニットテストをすり抜ける。ここでしか捕まらない。
  */
@@ -29,8 +30,12 @@ const HEADED = process.argv.includes('--headed');
 const SLOW = process.argv.includes('--slow');
 // 配る 1 枚版も、同じテストを全部通す。まとめる過程で壊れることがあるため。
 const BUNDLE = process.argv.includes('--bundle');
+// Artifact に出す形も同じテストに通す。<head> を向こうが付ける形なので、
+// 包み方が変わっただけで壊れることがある。
+const ARTIFACT = process.argv.includes('--artifact');
 const PORT = 8123 + (process.pid % 400);
-const BASE = 'http://127.0.0.1:' + PORT + '/' + (BUNDLE ? 'dist/dorone.html' : '');
+const BASE = 'http://127.0.0.1:' + PORT + '/'
+  + (ARTIFACT ? 'dist/artifact-preview.html' : (BUNDLE ? 'dist/dorone.html' : ''));
 
 // ---------------------------------------------------------------- 小さなテスト土台
 let pass = 0, fail = 0;
@@ -148,7 +153,7 @@ async function screenHash(page) {
   const cdp = await ctxPortrait.newCDPSession(page);
   const finger = makeFinger(cdp);
 
-  console.log('\n■ 読み込みとメニュー' + (BUNDLE ? '  (1 枚にまとめた版)' : ''));
+  console.log('\n■ 読み込みとメニュー' + (ARTIFACT ? '  (Artifact の形)' : (BUNDLE ? '  (1 枚にまとめた版)' : '')));
 
   await t('JS のエラーが出ていない', () => ok(errors.length === 0, errors.join('\n       ')));
 
