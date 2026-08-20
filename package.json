@@ -1,0 +1,16 @@
+{
+  "name": "dorone",
+  "version": "1.0.0",
+  "description": "ドローン操作練習 — 部屋の中で、実機を壊さずに練習するシミュレータ",
+  "private": true,
+  "scripts": {
+    "start": "node serve.js",
+    "test": "node --test *.test.js",
+    "test:ui": "node browser-test.js",
+    "test:bundle": "node tools/bundle.js && node browser-test.js --bundle",
+    "bundle": "node tools/bundle.js",
+    "test:all": "npm test && npm run test:ui && npm run test:bundle",
+    "icon": "node tools/make-icon.js"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>ドローン操作練習</title>
+<meta name="description" content="家のトイドローンを飛ばす前に、操縦者視点で練習する">
+<meta name="theme-color" content="#0e1220">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ドローン練習">
+<link rel="icon" href="./icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="manifest" href="./app.webmanifest">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ================= 飛行画面 ================= -->
+  <canvas id="view"></canvas>
+
+  <div id="hud" class="hud" hidden>
+    <div class="hud-top">
+      <button type="button" id="btnMenu" class="chip chip-ghost" aria-label="メニュー">≡</button>
+      <div class="hud-task">
+        <div class="hud-task-name" id="hudTaskName">—</div>
+        <div class="hud-task-goal" id="hudTaskGoal"></div>
+      </div>
+      <div class="hud-time" id="hudTime">0.0<span>s</span></div>
+    </div>
+
+    <div class="hud-progress"><div class="hud-progress-fill" id="hudProgress"></div></div>
+
+    <div class="hud-gauges" id="hudGauges">
+      <div class="gauge"><span class="gauge-label">高さ</span><span class="gauge-value" id="gaugeAlt">0.00</span><span class="gauge-unit">m</span></div>
+      <div class="gauge"><span class="gauge-label">速さ</span><span class="gauge-value" id="gaugeSpd">0.00</span><span class="gauge-unit">m/s</span></div>
+      <div class="gauge gauge-heading"><span class="gauge-label">機首</span><svg id="gaugeHeading" viewBox="-12 -12 24 24" aria-hidden="true"><circle r="10.5" class="hd-ring"/><path d="M0,-8 L5,6 L0,3 L-5,6 Z" class="hd-arrow" id="hdArrow"/></svg></div>
+      <div class="gauge gauge-fps"><span class="gauge-label">fps</span><span class="gauge-value" id="gaugeFps">–</span></div>
+    </div>
+
+    <div class="hud-toast" id="hudToast" hidden></div>
+  </div>
+
+  <!-- 操作 -->
+  <div id="controls" class="controls" hidden>
+    <div class="stick-wrap">
+      <div class="stick" id="stickL" data-side="left">
+        <div class="stick-cross" aria-hidden="true"></div>
+        <div class="stick-knob" id="knobL"></div>
+      </div>
+      <div class="stick-label" id="labelL">上下 / 旋回</div>
+    </div>
+
+    <div class="center-buttons">
+      <button type="button" id="btnTakeoff" class="round-btn round-btn-go">離陸</button>
+      <button type="button" id="btnRetry" class="round-btn">やり直す</button>
+    </div>
+
+    <div class="stick-wrap">
+      <div class="stick" id="stickR" data-side="right">
+        <div class="stick-cross" aria-hidden="true"></div>
+        <div class="stick-knob" id="knobR"></div>
+      </div>
+      <div class="stick-label" id="labelR">前後 / 左右</div>
+    </div>
+  </div>
+
+  <!-- ================= メニュー ================= -->
+  <section id="menu" class="sheet">
+    <div class="sheet-inner">
+      <header class="menu-head">
+        <h1>ドローン操作練習</h1>
+        <p class="sub">部屋の中で、実機を壊さずに。<br>操縦者から見た視点で飛ばします。</p>
+      </header>
+
+      <h2 class="section-title">課題</h2>
+      <ul class="task-list" id="taskList"></ul>
+
+      <h2 class="section-title">設定</h2>
+      <div class="settings">
+        <div class="setting">
+          <span class="setting-label">スティック</span>
+          <div class="seg" id="setMode">
+            <button type="button" data-v="2" class="on">モード2</button>
+            <button type="button" data-v="1">モード1</button>
+          </div>
+          <p class="setting-note" id="modeNote">左=上下/旋回、右=前後/左右。海外製トイドローンの標準。</p>
+        </div>
+
+        <div class="setting">
+          <span class="setting-label">流れやすさ</span>
+          <div class="seg" id="setDifficulty">
+            <button type="button" data-v="0.5">やさしい</button>
+            <button type="button" data-v="1" class="on">ふつう</button>
+            <button type="button" data-v="1.6">実機なみ</button>
+          </div>
+          <p class="setting-note">GPS のないトイドローンは、放っておくと一方向に流れます。その強さ。</p>
+        </div>
+
+        <div class="setting">
+          <span class="setting-label">高度維持</span>
+          <div class="seg" id="setAltHold">
+            <button type="button" data-v="1" class="on">あり(実機と同じ)</button>
+            <button type="button" data-v="0">なし(上級)</button>
+          </div>
+          <p class="setting-note" id="altHoldNote">気圧センサーつき。スロットルを戻すとその高さで止まります。</p>
+        </div>
+
+        <div class="setting">
+          <span class="setting-label">補助表示</span>
+          <div class="seg" id="setAssist">
+            <button type="button" data-v="1" class="on">あり</button>
+            <button type="button" data-v="0">なし</button>
+          </div>
+          <p class="setting-note">高さの線と数値。慣れたら切ると、実機に近くなります。</p>
+        </div>
+      </div>
+
+      <details class="tips">
+        <summary>実機がうまく飛ばせない、3 つの理由</summary>
+        <ol>
+          <li><b>傾き = 加速度。</b>前に倒すと「前に進む」のではなく「前に加速し続ける」。止めるには逆に倒す。</li>
+          <li><b>対面だと左右が逆。</b>機体がこちらを向いていると、右に倒すと自分から見て左へ行く。</li>
+          <li><b>戻す癖がない。</b>入れっぱなしにすると壁か天井に当たる。小さく当てて、すぐ戻す。</li>
+        </ol>
+      </details>
+
+      <p class="foot">練習用のシミュレータです。実際に飛ばすときは、まわりの人と物、飛ばせる場所の決まりを確かめてください。</p>
+    </div>
+  </section>
+
+  <!-- ================= 結果 ================= -->
+  <section id="result" class="sheet" hidden>
+    <div class="sheet-inner">
+      <div class="result-head">
+        <div class="result-verdict" id="resVerdict">クリア</div>
+        <div class="result-stars" id="resStars">★★★</div>
+        <div class="result-msg" id="resMsg"></div>
+      </div>
+
+      <div class="result-scores" id="resScores"></div>
+
+      <h2 class="section-title">どう飛んだか</h2>
+      <div class="charts">
+        <figure>
+          <figcaption>上から見た軌跡</figcaption>
+          <canvas id="chartTop" width="320" height="320"></canvas>
+        </figure>
+        <figure>
+          <figcaption>高さの記録</figcaption>
+          <canvas id="chartAlt" width="320" height="180"></canvas>
+        </figure>
+      </div>
+
+      <h2 class="section-title">気づいたこと</h2>
+      <ul class="notes" id="resNotes"></ul>
+
+      <div class="result-actions">
+        <button type="button" id="btnResRetry" class="btn btn-primary">もう一度</button>
+        <button type="button" id="btnResNext" class="btn">次の課題</button>
+        <button type="button" id="btnResMenu" class="btn btn-ghost">課題を選ぶ</button>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script src="./core.js"></script>
+<script src="./tasks.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>

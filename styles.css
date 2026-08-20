@@ -1,0 +1,377 @@
+/* iPhone で指で触る前提。拡大・スクロール・長押し選択はすべて殺す。 */
+
+:root {
+  --bg: #0e1220;
+  --panel: #171d31;
+  --panel-2: #1f2740;
+  --line: #2c3550;
+  --ink: #eef2ff;
+  --ink-dim: #97a2c4;
+  --accent: #4fc3ff;
+  --accent-2: #7ee3a4;
+  --warn: #ffb454;
+  --bad: #ff6b6b;
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  position: fixed;
+  inset: 0;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: none;
+}
+
+#app { position: fixed; inset: 0; }
+
+#view {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+
+[hidden] { display: none !important; }
+
+/* ---------------------------------------------------------------- HUD
+   上に重ねる層は、既定では指を通す。反応させたい所だけ pointer-events を戻す。 */
+.hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  padding: calc(var(--safe-t) + 8px) calc(var(--safe-r) + 10px) 0 calc(var(--safe-l) + 10px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* スティックの高さぶんは空けておく。ここに何か出すと指の下に隠れる。 */
+  padding-bottom: calc(var(--safe-b) + 168px);
+}
+@media (max-height: 460px) { .hud { padding-bottom: calc(var(--safe-b) + 118px); } }
+
+.hud-top { display: flex; align-items: flex-start; gap: 10px; }
+
+.chip {
+  pointer-events: auto;
+  border: 1px solid var(--line);
+  background: rgba(23, 29, 49, 0.82);
+  color: var(--ink);
+  border-radius: 12px;
+  font-size: 20px;
+  line-height: 1;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+.chip:active { background: var(--panel-2); }
+
+.hud-task { flex: 1 1 auto; min-width: 0; text-align: center; }
+.hud-task-name { font-size: 14px; font-weight: 700; letter-spacing: .02em; text-shadow: 0 1px 3px rgba(0,0,0,.7); }
+.hud-task-goal { font-size: 11px; color: var(--ink-dim); text-shadow: 0 1px 3px rgba(0,0,0,.7); }
+
+.hud-time {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-size: 19px;
+  font-weight: 700;
+  min-width: 62px;
+  text-align: right;
+  text-shadow: 0 1px 3px rgba(0,0,0,.7);
+}
+.hud-time span { font-size: 11px; color: var(--ink-dim); margin-left: 1px; }
+
+.hud-progress {
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255,255,255,.13);
+  overflow: hidden;
+}
+.hud-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  border-radius: 3px;
+}
+.hud-progress-fill.warn { background: linear-gradient(90deg, var(--warn), var(--bad)); }
+
+.hud-gauges { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.gauge {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  background: rgba(14, 18, 32, .55);
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: 9px;
+  padding: 3px 8px;
+}
+.gauge-label { font-size: 10px; color: var(--ink-dim); }
+.gauge-value { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.gauge-unit { font-size: 10px; color: var(--ink-dim); }
+.gauge-heading { padding: 2px 7px; align-items: center; }
+.gauge-heading svg { width: 22px; height: 22px; }
+.hd-ring { fill: rgba(255,255,255,.05); stroke: rgba(255,255,255,.22); stroke-width: 1; }
+.hd-arrow { fill: var(--accent); transform-origin: 0 0; }
+.gauge-fps { opacity: .55; }
+
+.hud-toast {
+  align-self: center;
+  /* 上に出すと機体と重なる。スティックのすぐ上に出す。 */
+  margin-top: auto;
+  margin-bottom: 8px;
+  background: rgba(14,18,32,.9);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  max-width: 86%;
+  text-align: center;
+}
+.hud-toast.bad { border-color: var(--bad); color: #ffd2d2; }
+
+/* ---------------------------------------------------------------- スティック */
+.controls {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  padding: 0 calc(var(--safe-r) + 12px) calc(var(--safe-b) + 12px) calc(var(--safe-l) + 12px);
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.stick-wrap { pointer-events: none; display: flex; flex-direction: column; align-items: center; gap: 5px; }
+
+/* 入れ物は正方形。回しても大きさが変わらないように。 */
+.stick {
+  pointer-events: auto;
+  position: relative;
+  width: 132px;
+  height: 132px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 42%, rgba(48,60,96,.72), rgba(18,23,40,.82));
+  border: 1.5px solid rgba(140,165,225,.30);
+  box-shadow: inset 0 2px 14px rgba(0,0,0,.5), 0 3px 14px rgba(0,0,0,.35);
+  touch-action: none;
+}
+.stick.active { border-color: rgba(79,195,255,.65); }
+
+.stick-cross {
+  position: absolute;
+  inset: 16px;
+  border-radius: 50%;
+  background:
+    linear-gradient(to right, transparent calc(50% - .5px), rgba(255,255,255,.13) calc(50% - .5px), rgba(255,255,255,.13) calc(50% + .5px), transparent calc(50% + .5px)),
+    linear-gradient(to bottom, transparent calc(50% - .5px), rgba(255,255,255,.13) calc(50% - .5px), rgba(255,255,255,.13) calc(50% + .5px), transparent calc(50% + .5px));
+}
+
+/* 位置は left/top で決める。transform を使うとアニメーションに上書きされる。 */
+.stick-knob {
+  position: absolute;
+  width: 56px;
+  height: 56px;
+  left: 38px;
+  top: 38px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 42% 34%, #dfe8ff, #8ea2cf 62%, #55648f);
+  box-shadow: 0 3px 10px rgba(0,0,0,.5);
+  pointer-events: none;
+}
+.stick.active .stick-knob { background: radial-gradient(circle at 42% 34%, #eaf6ff, #6fc4ef 62%, #3b8dbd); }
+
+.stick-label { font-size: 10.5px; color: var(--ink-dim); text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+
+.center-buttons {
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  padding-bottom: 22px;
+}
+.round-btn {
+  pointer-events: auto;
+  border: 1px solid var(--line);
+  background: rgba(23,29,49,.88);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 9px 16px;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+.round-btn:active { background: var(--panel-2); }
+.round-btn-go { border-color: rgba(126,227,164,.55); color: #cdf7dd; }
+.round-btn-go.landing { border-color: rgba(255,180,84,.6); color: #ffe2ba; }
+
+/* 画面が狭いときは小さく */
+@media (max-height: 460px) {
+  .stick { width: 112px; height: 112px; }
+  .stick-knob { width: 48px; height: 48px; left: 32px; top: 32px; }
+  .center-buttons { padding-bottom: 10px; }
+}
+@media (max-width: 360px) {
+  .stick { width: 116px; height: 116px; }
+  .stick-knob { width: 50px; height: 50px; left: 33px; top: 33px; }
+}
+
+/* ---------------------------------------------------------------- シート (メニュー / 結果) */
+.sheet {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, #0e1220 0%, #131a2e 100%);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  z-index: 20;
+}
+.sheet-inner {
+  max-width: 620px;
+  margin: 0 auto;
+  padding: calc(var(--safe-t) + 22px) calc(var(--safe-r) + 18px) calc(var(--safe-b) + 40px) calc(var(--safe-l) + 18px);
+}
+
+.menu-head h1 { font-size: 23px; margin: 0 0 6px; letter-spacing: .01em; }
+.menu-head .sub { margin: 0 0 20px; color: var(--ink-dim); font-size: 13px; line-height: 1.65; }
+
+.section-title {
+  font-size: 12px;
+  color: var(--ink-dim);
+  text-transform: none;
+  letter-spacing: .08em;
+  margin: 22px 0 9px;
+  font-weight: 700;
+}
+
+.task-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.task-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px 14px;
+  color: var(--ink);
+  font: inherit;
+}
+.task-item:active { background: var(--panel-2); }
+.task-item .ti-body { flex: 1 1 auto; min-width: 0; }
+.task-item .ti-name { font-size: 14.5px; font-weight: 700; }
+.task-item .ti-goal { font-size: 11.5px; color: var(--ink-dim); margin-top: 3px; line-height: 1.5; }
+.task-item .ti-stars { font-size: 14px; letter-spacing: 1px; flex: 0 0 auto; }
+.ti-stars .on { color: var(--warn); }
+.ti-stars .off { color: #39415e; }
+
+.settings { display: flex; flex-direction: column; gap: 16px; }
+.setting-label { display: block; font-size: 12.5px; font-weight: 700; margin-bottom: 7px; }
+.seg { display: flex; gap: 6px; flex-wrap: wrap; }
+.seg button {
+  flex: 1 1 auto;
+  min-width: 78px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--ink-dim);
+  border-radius: 11px;
+  padding: 9px 8px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.seg button.on { background: var(--panel-2); border-color: var(--accent); color: var(--ink); }
+.setting-note { margin: 7px 0 0; font-size: 11.5px; color: var(--ink-dim); line-height: 1.6; }
+
+.tips { margin-top: 26px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; }
+.tips summary { font-size: 13px; font-weight: 700; cursor: pointer; }
+.tips ol { margin: 10px 0 2px; padding-left: 20px; font-size: 12.5px; color: var(--ink-dim); line-height: 1.75; }
+.tips b { color: var(--ink); }
+
+.foot { margin-top: 24px; font-size: 11px; color: #6b769a; line-height: 1.7; }
+
+/* ---------------------------------------------------------------- 結果 */
+.result-head { text-align: center; margin-bottom: 18px; }
+.result-verdict { font-size: 20px; font-weight: 800; }
+.result-verdict.fail { color: var(--bad); }
+.result-verdict.pass { color: var(--accent-2); }
+.result-stars { font-size: 30px; letter-spacing: 6px; margin: 6px 0 4px; }
+.result-stars .on { color: var(--warn); }
+.result-stars .off { color: #333c58; }
+.result-msg { font-size: 13px; color: var(--ink-dim); line-height: 1.6; }
+
+.result-scores { display: flex; flex-direction: column; gap: 9px; }
+.score-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.score-row .sr-label { width: 74px; flex: 0 0 auto; color: var(--ink-dim); }
+.score-row .sr-bar { display: block; flex: 1 1 auto; height: 7px; border-radius: 4px; background: rgba(255,255,255,.09); overflow: hidden; }
+/* display:block を付けないと、インライン要素なので width/height の % が効かない */
+.score-row .sr-fill { display: block; height: 100%; min-width: 2px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-radius: 4px; }
+.score-row .sr-num { width: 66px; flex: 0 0 auto; text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
+
+.charts { display: flex; flex-wrap: wrap; gap: 14px; }
+.charts figure { margin: 0; flex: 1 1 260px; min-width: 0; }
+.charts figcaption { font-size: 11.5px; color: var(--ink-dim); margin-bottom: 6px; }
+.charts canvas {
+  width: 100%;
+  height: auto;
+  aspect-ratio: auto;
+  display: block;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.notes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+.notes li {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 11px;
+  padding: 11px 13px;
+  font-size: 12.5px;
+  line-height: 1.75;
+}
+.notes li.good { border-left-color: var(--accent-2); }
+
+.result-actions { display: flex; gap: 9px; margin-top: 26px; flex-wrap: wrap; }
+.btn {
+  flex: 1 1 auto;
+  min-width: 100px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  border-radius: 12px;
+  padding: 13px 12px;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 700;
+}
+.btn:active { background: var(--panel-2); }
+.btn-primary { background: #1d4f6e; border-color: var(--accent); }
+.btn-ghost { color: var(--ink-dim); }
