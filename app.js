@@ -118,7 +118,7 @@
     'hudTaskName', 'hudTaskGoal', 'hudTime', 'hudProgress', 'gaugeAlt', 'gaugeSpd',
     'hdArrow', 'gaugeFps', 'hudToast', 'hudGauges', 'taskList', 'stickL', 'stickR', 'hudProgressBar',
     'gaugeBattery', 'batteryPct', 'batteryLeft', 'batteryFill', 'btnBattery', 'setBattery', 'btnNight', 'btnStand',
-    'setSound', 'setNight', 'nightNote', 'btnReplay', 'replay', 'replaySeek', 'replayPlay', 'replayTime',
+    'setSound', 'btnSoundTest', 'soundState', 'setNight', 'nightNote', 'btnReplay', 'replay', 'replaySeek', 'replayPlay', 'replayTime',
     'replayClose', 'replayStickL', 'replayStickR', 'replayNote', 'batteryNote',
     'knobL', 'knobR', 'labelL', 'labelR', 'resVerdict', 'resStars', 'resMsg',
     'resScores', 'resNotes', 'chartTop', 'chartAlt', 'btnResRetry', 'btnResNext',
@@ -1903,7 +1903,28 @@
     els.batteryNote.textContent = app.settings.battery
       ? 'ホバリングで約 7 分。走行をまたいで持ちこします。減ったら「電池を替える」で新品に。'
       : '電池を気にせず練習します。';
+    syncSoundState();
     updateStickLabels();
+  }
+
+  /**
+   * 音が本当に出せる状態かを、そのまま書き出す。
+   * 「聞こえない」ときに、アプリ側の問題か端末側の問題かを切り分けるため。
+   */
+  function syncSoundState() {
+    if (!els.soundState) return;
+    const S = window.Sound;
+    if (!S) { els.soundState.textContent = 'この端末では音を出せません。'; return; }
+    const d = S.debug();
+    if (!app.settings.sound) {
+      els.soundState.textContent = '音を「なし」にしています。';
+    } else if (d.state !== 'running') {
+      els.soundState.textContent = '画面を 1 回触るまで、iPhone は音を出せません。上のボタンを押してください。';
+    } else {
+      els.soundState.textContent = '音は出せる状態です。'
+        + '押しても聞こえないときは、iPhone の左側面にあるマナーモードのスイッチと、'
+        + '音量ボタンを確かめてください。';
+    }
   }
 
   // ================================================================
@@ -1919,7 +1940,14 @@
     bindSeg(els.setAssist, 'assist');
     bindSeg(els.setBattery, 'battery', syncSettingsUI);
     bindSeg(els.setNight, 'night', function () { syncSettingsUI(); applyNight(); });
-    bindSeg(els.setSound, 'sound', function (v) { if (window.Sound) window.Sound.setMuted(!v); });
+    bindSeg(els.setSound, 'sound', function (v) {
+      if (window.Sound) window.Sound.setMuted(!v);
+      syncSoundState();
+    });
+    els.btnSoundTest.addEventListener('click', function () {
+      if (window.Sound) window.Sound.testTone();
+      syncSoundState();
+    });
     syncSettingsUI();
 
     els.btnMenu.addEventListener('click', function () { app.paused = true; setScreen('menu'); });
@@ -1965,6 +1993,7 @@
       if (window.Sound) {
         window.Sound.start();
         window.Sound.setMuted(!app.settings.sound);
+        syncSoundState();
       }
     };
     document.addEventListener('pointerdown', wake, { once: false });

@@ -673,9 +673,10 @@
       on: on && !state.crashed,
       // 4 つのモーターの基本の高さ。スロットルで上がる。
       motorHz: 108 + spin * 150 + clamp(climb, -1, 1.5) * 14,
-      motorGain: on && !state.crashed ? 0.030 + spin * 0.070 : 0,
+      // スマホの小さいスピーカーだと、ここが小さすぎると何も聞こえない
+      motorGain: on && !state.crashed ? 0.055 + spin * 0.125 : 0,
       // 動くほど風切り音が乗る
-      windGain: clamp(speed * 0.020, 0, 0.055),
+      windGain: clamp(speed * 0.028, 0, 0.075),
       lowBattery: !!config.battery && state.battery <= config.lowBattery && state.flying
     };
   }

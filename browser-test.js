@@ -635,6 +635,32 @@ async function screenHash(page) {
     ok(d.state === 'running', 'AudioContext が ' + d.state);
   });
 
+  await t('マナーモードでも鳴るように、音の種類を「再生」にしている', async () => {
+    // iOS は本体横のスイッチを切ると Web Audio が消える。
+    // navigator.audioSession があればそれで、無ければ無音のループで切りかえる。
+    const d = await page.evaluate(() => window.Sound.debug());
+    ok(d.session === 'audioSession' || d.session === 'silent',
+      '音の種類を切りかえていない (' + d.session + ')');
+    if (d.session === 'silent') ok(d.silentPlaying, '無音のループが止まっている');
+    console.log('       音の種類 ' + d.session);
+  });
+
+  await t('設定の「音を試す」で、消音中でも確かめの音が鳴る', async () => {
+    await page.locator('#btnMenu').tap();
+    await page.waitForTimeout(200);
+    await page.locator('#setSound button[data-v="0"]').tap();
+    await page.waitForTimeout(300);
+    await page.locator('#btnSoundTest').tap();
+    await page.waitForTimeout(150);
+    near(await page.evaluate(() => window.Sound.debug().master), 1, 0.05, '消音のままで鳴らない');
+    await page.waitForTimeout(1000);
+    near(await page.evaluate(() => window.Sound.debug().master), 0, 0.05, '鳴らしたあと消音に戻らない');
+    await page.locator('#setSound button[data-v="1"]').tap();
+    await page.waitForTimeout(300);
+    ok((await page.locator('#soundState').textContent()).includes('マナーモード'),
+      '聞こえないときの手がかりが出ていない');
+  });
+
   await t('スロットルを上げるとモーター音が高くなる', async () => {
     await page.evaluate(() => window.__app.startTask('hover'));
     await page.waitForTimeout(200);
@@ -645,6 +671,39 @@ async function screenHash(page) {
     await page.waitForTimeout(500);
     const up = await page.evaluate(() => window.Sound.debug().motorHz);
     ok(up > idle + 8, '音が変わらない ' + idle.toFixed(0) + 'Hz -> ' + up.toFixed(0) + 'Hz');
+  });
+
+  await t('飛ばすと、本当に波形が出ている (無音になっていない)', async () => {
+    // 「motorGain の数字が上がった」だけでは、音が出ている証拠にならない。
+    // master の出口を解析器で測る。
+    await page.evaluate(() => window.__app.startTask('hover'));
+    await page.waitForTimeout(200);
+    const quiet = await page.evaluate(() => window.Sound.level());
+    await page.evaluate(() => window.__app.simulate(2.0, () => ({ throttle: 1, yaw: 0, pitch: 0, roll: 0 })));
+    await page.waitForTimeout(600);
+    const loud = await page.evaluate(() => window.Sound.level());
+    console.log('       出ている音の大きさ 地上 ' + quiet.toFixed(4) + ' / 全開 ' + loud.toFixed(4));
+    ok(loud > 0.02, '飛ばしても音の波が出ていない (' + loud.toFixed(4) + ')');
+    ok(loud > quiet * 3, '地上と変わらない');
+  });
+
+  await t('いちばん重なるときでも、音が割れない', async () => {
+    // モーター全開 + ぶつかった音 + 合図が同時に鳴ると、足し算で 1.0 を超える。
+    // 出口にリミッターを入れてある。その効きを測る。
+    const peak = await page.evaluate(async () => {
+      window.Sound.level();
+      window.Sound.thud(1); window.Sound.cue('success');
+      let m = 0;
+      const t0 = performance.now();
+      while (performance.now() - t0 < 800) {
+        await new Promise(r => setTimeout(r, 16));
+        m = Math.max(m, window.Sound.__peak());
+      }
+      return m;
+    });
+    console.log('       いちばん大きいところ ' + peak.toFixed(3));
+    ok(peak < 0.99, '割れている (' + peak.toFixed(3) + ')');
+    ok(peak > 0.2, '重ねたのに小さすぎる (' + peak.toFixed(3) + ')');
   });
 
   await t('音を切ると全体の音量が 0 になる', async () => {

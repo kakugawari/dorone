@@ -13,6 +13,7 @@
 
   let ctx = null;
   let master = null;
+  let limiter = null;
   let motors = null;      // 4 つのモーター
   let motorGain = null;
   let motorFilter = null;
@@ -22,10 +23,67 @@
   let muted = false;
   let started = false;
   let lastBeep = 0;
+  let silentEl = null;
+  let session = 'none';
 
   // 4 枚のプロペラは同じ回転数ではない。わずかにずらすと、
   // 実機のあの「うなり」が出る。
   const DETUNE = [0, -3.5, 4.2, -1.8];
+
+  /**
+   * 無音の WAV を作る。iOS のマナーモード対策に、これを鳴らしっぱなしにする。
+   * (中身は 8bit 無音の 0.25 秒。ファイルを増やしたくないので、その場で作る)
+   */
+  function silentWavUrl() {
+    const rate = 8000, n = 2000;
+    const b = new Uint8Array(44 + n);
+    const dv = new DataView(b.buffer);
+    const put = function (o, t) { for (let i = 0; i < t.length; i++) b[o + i] = t.charCodeAt(i); };
+    put(0, 'RIFF'); dv.setUint32(4, 36 + n, true); put(8, 'WAVEfmt ');
+    dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+    dv.setUint32(24, rate, true); dv.setUint32(28, rate, true);
+    dv.setUint16(32, 1, true); dv.setUint16(34, 8, true);
+    put(36, 'data'); dv.setUint32(40, n, true);
+    b.fill(128, 44);
+    let str = '';
+    for (let i = 0; i < b.length; i++) str += String.fromCharCode(b[i]);
+    return 'data:audio/wav;base64,' + root.btoa(str);
+  }
+
+  /**
+   * iOS は本体横のマナーモードのスイッチを切ると、Web Audio の音が消える。
+   * Web Audio は「環境音 (ambient)」あつかいで、着信音の音量に乗っているため。
+   * 「再生 (playback)」に変えると、動画や音楽と同じあつかいになって鳴る。
+   *
+   * - Safari 17 以降: navigator.audioSession.type で直に指定できる
+   * - それ以前: 無音を 1 本ループで鳴らしておくと、iOS が「再生中」と見なして
+   *   playback に切りかわる
+   *
+   * どちらも「指で触ったとき」に呼ぶこと。
+   */
+  function usePlaybackSession() {
+    try {
+      if (root.navigator && root.navigator.audioSession) {
+        root.navigator.audioSession.type = 'playback';
+        session = 'audioSession';
+      }
+    } catch (e) { /* 対応していなければ下の手に任せる */ }
+
+    if (!root.document || typeof root.Audio !== 'function') return;
+    try {
+      if (!silentEl) {
+        silentEl = new root.Audio(silentWavUrl());
+        silentEl.loop = true;
+        silentEl.setAttribute('playsinline', '');
+        silentEl.volume = 1;   // 中身が無音なので、音量は上げたままでよい
+      }
+      if (silentEl.paused) {
+        const pr = silentEl.play();
+        if (pr && pr.catch) pr.catch(function () { /* 触る前に呼ばれただけ */ });
+      }
+      if (session === 'none') session = 'silent';
+    } catch (e) { /* 鳴らせなくても、本体の音は出る端末が多い */ }
+  }
 
   function makeNoise() {
     const len = Math.floor(ctx.sampleRate * 1.5);
@@ -43,11 +101,22 @@
   /** 指で触ったときに呼ぶ。iOS はこれがないと鳴らない。 */
   function start() {
     if (!AC) return false;
+    usePlaybackSession();
     if (!ctx) {
       ctx = new AC();
       master = ctx.createGain();
       master.gain.value = muted ? 0 : 1;
-      master.connect(ctx.destination);
+      // スマホのスピーカーで聞こえるように音を大きめにしてあるので、
+      // モーター全開 + ぶつかった音 + 合図が重なると 1.0 を超えて割れる。
+      // 出口で頭を押さえておく。
+      limiter = ctx.createDynamicsCompressor();
+      limiter.threshold.value = -6;
+      limiter.knee.value = 3;
+      limiter.ratio.value = 12;
+      limiter.attack.value = 0.003;
+      limiter.release.value = 0.20;
+      master.connect(limiter);
+      limiter.connect(ctx.destination);
 
       motorFilter = ctx.createBiquadFilter();
       motorFilter.type = 'lowpass';
@@ -83,6 +152,26 @@
     if (ctx.state === 'suspended') ctx.resume();
     started = true;
     return true;
+  }
+
+  /**
+   * 裏に回ると iOS は音を止める。戻ってきたら鳴らしなおす。
+   * (電話や他のアプリの音でも止まる)
+   */
+  function resume() {
+    if (!ctx || !started) return false;
+    if (ctx.state === 'suspended') ctx.resume();
+    if (silentEl && silentEl.paused) {
+      const pr = silentEl.play();
+      if (pr && pr.catch) pr.catch(function () {});
+    }
+    return ctx.state !== 'suspended';
+  }
+
+  if (typeof root.document !== 'undefined' && root.document.addEventListener) {
+    root.document.addEventListener('visibilitychange', function () {
+      if (!root.document.hidden) resume();
+    });
   }
 
   function setMuted(m) {
@@ -138,7 +227,7 @@
     f.frequency.setValueAtTime(500 + s * 900, t);
     f.frequency.exponentialRampToValueAtTime(120, t + 0.25);
     const g = ctx.createGain();
-    g.gain.setValueAtTime(0.28 * s, t);
+    g.gain.setValueAtTime(0.36 * s, t);
     g.gain.exponentialRampToValueAtTime(0.0001, t + 0.28 + s * 0.2);
     src.connect(f); f.connect(g); g.connect(master);
     src.start(t); src.stop(t + 0.6);
@@ -156,17 +245,66 @@
   function cue(kind) {
     const seq = CUES[kind];
     if (!seq) return;
-    seq.forEach(function (n) { beep(n[0], n[1], 0.055, n[2] || 0); });
+    seq.forEach(function (n) { beep(n[0], n[1], 0.085, n[2] || 0); });
+  }
+
+  /**
+   * 「音が出ているか」を確かめるための音。設定のボタンから鳴らす。
+   * 消音中でも、押したら鳴らす (確かめるための音なので)。
+   */
+  function testTone() {
+    start();
+    if (!ctx) return false;
+    const wasMuted = muted;
+    if (wasMuted) setMuted(false);
+    beep(660, 0.16, 0.16, 0.00);
+    beep(880, 0.16, 0.16, 0.18);
+    beep(1320, 0.30, 0.16, 0.36);
+    if (wasMuted) {
+      root.setTimeout(function () { setMuted(true); }, 900);
+    }
+    return true;
+  }
+
+  /**
+   * いま実際に出ている音の大きさ (RMS)。テストから「本当に鳴っているか」を測る。
+   * 呼ばれたときだけ解析器をつなぐので、ふだんは負荷にならない。
+   */
+  let analyser = null;
+  function level() {
+    if (!ctx || !master) return 0;
+    if (!analyser) {
+      analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      // 出口 (リミッターのあと) を測る。ここが実際にスピーカーへ行く音。
+      (limiter || master).connect(analyser);
+    }
+    const buf = new Float32Array(analyser.fftSize);
+    analyser.getFloatTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+    return Math.sqrt(sum / buf.length);
+  }
+
+  function peak() {
+    if (!analyser) { level(); if (!analyser) return 0; }
+    const buf = new Float32Array(analyser.fftSize);
+    analyser.getFloatTimeDomainData(buf);
+    let m = 0;
+    for (let i = 0; i < buf.length; i++) m = Math.max(m, Math.abs(buf[i]));
+    return m;
   }
 
   root.Sound = {
-    start: start, update: update, setMuted: setMuted, isMuted: isMuted,
-    isRunning: isRunning, cue: cue, thud: thud, beep: beep,
+    start: start, resume: resume, level: level, __peak: peak, update: update, setMuted: setMuted, isMuted: isMuted,
+    isRunning: isRunning, cue: cue, thud: thud, beep: beep, testTone: testTone,
     // テストからのぞく用
     debug: function () {
       return {
         ready: !!ctx,
         state: ctx ? ctx.state : 'none',
+        session: session,
+        silentPlaying: !!silentEl && !silentEl.paused,
         muted: muted,
         master: master ? master.gain.value : null,
         motorGain: motorGain ? motorGain.gain.value : null,
