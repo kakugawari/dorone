@@ -79,8 +79,35 @@ body {
   gap: 6px;
   /* スティックの高さぶんは空けておく。ここに何か出すと指の下に隠れる。 */
   padding-bottom: calc(var(--safe-b) + 168px);
+  /* 暗幕を中身の後ろに置くために、ここを重ね順の基準にする */
+  z-index: 1;
 }
 @media (max-height: 460px) { .hud { padding-bottom: calc(var(--safe-b) + 118px); } }
+
+/* 昼の画面は明るいので、そのままだと白い文字が読めない。
+   上下だけ薄く暗くする。写真の上に文字を載せるときと同じ手。 */
+.hud-scrim {
+  position: absolute;
+  left: 0; right: 0;
+  pointer-events: none;
+  /* 絶対配置の要素は、ふつうに並んだ中身より「後」に描かれる。
+     そのままだと暗幕が文字の上に乗ってしまうので、後ろに回す。 */
+  z-index: -1;
+}
+.hud-scrim-top {
+  top: 0;
+  height: calc(var(--safe-t) + 190px);
+  background: linear-gradient(to bottom, rgba(8,11,20,.80) 0%, rgba(8,11,20,.55) 55%, rgba(8,11,20,0) 100%);
+}
+.hud-scrim-bottom {
+  bottom: 0;
+  height: calc(var(--safe-b) + 210px);
+  background: linear-gradient(to top, rgba(8,11,20,.62) 0%, rgba(8,11,20,.28) 55%, rgba(8,11,20,0) 100%);
+}
+@media (max-height: 460px) {
+  .hud-scrim-top { height: calc(var(--safe-t) + 130px); }
+  .hud-scrim-bottom { height: calc(var(--safe-b) + 150px); }
+}
 
 .hud-top { display: flex; align-items: flex-start; gap: 10px; }
 
@@ -137,8 +164,8 @@ body {
   display: flex;
   align-items: baseline;
   gap: 4px;
-  background: rgba(14, 18, 32, .55);
-  border: 1px solid rgba(255,255,255,.07);
+  background: rgba(14, 18, 32, .78);
+  border: 1px solid rgba(255,255,255,.09);
   border-radius: 9px;
   padding: 3px 8px;
 }
@@ -342,7 +369,7 @@ body {
 }
 .stick.active .stick-knob { background: radial-gradient(circle at 42% 34%, #eaf6ff, #6fc4ef 62%, #3b8dbd); }
 
-.stick-label { font-size: 10.5px; color: var(--ink-dim); text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+.stick-label { font-size: 10.5px; color: #b9c3de; text-shadow: 0 1px 4px rgba(0,0,0,.95); }
 
 .center-buttons {
   pointer-events: none;

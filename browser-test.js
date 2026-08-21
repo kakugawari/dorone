@@ -897,6 +897,44 @@ async function screenHash(page) {
     });
   }
 
+  /** 画面全体 (canvas + HUD を重ねた見た目) の、ある帯の明るさを測る。 */
+  async function stripStats(page, yCss, hCss) {
+    const shot = (await page.screenshot()).toString('base64');
+    return page.evaluate(async (o) => {
+      const img = new Image();
+      img.src = 'data:image/png;base64,' + o.b64;
+      await img.decode();
+      const cv = document.createElement('canvas');
+      cv.width = img.width; cv.height = img.height;
+      const g = cv.getContext('2d');
+      g.drawImage(img, 0, 0);
+      const sc = img.width / window.innerWidth;
+      const d = g.getImageData(0, Math.round(o.y * sc), cv.width, Math.round(o.h * sc)).data;
+      let sum = 0, n = 0, bright = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        const v = (d[i] + d[i + 1] + d[i + 2]) / 3;
+        sum += v; n++;
+        if (v > 190) bright++;
+      }
+      return { avg: sum / n, bright: bright };
+    }, { b64: shot, y: yCss, h: hCss });
+  }
+
+  await t('明るい昼でも、上に出る文字が読める (暗幕が中身の後ろにある)', async () => {
+    await page.evaluate(() => { window.__app.app.settings.night = 0; window.__app.startTask('hover'); });
+    await page.waitForTimeout(300);
+    await page.evaluate(() => window.__app.simulate(3, (s) => ({ throttle: s.pos.y < 1.2 ? 0.8 : 0, yaw: 0, pitch: 0, roll: 0 })));
+    await page.waitForTimeout(400);
+
+    const room = await stripStats(page, 220, 120);     // 3D の明るい所
+    const title = await stripStats(page, 18, 60);      // 題名のあたり
+    console.log('       3D ' + room.avg.toFixed(0) + ' / 題名まわり ' + title.avg.toFixed(0)
+      + ' (白い画素 ' + title.bright + ')');
+    ok(room.avg > 120, '昼なのに 3D が暗い (' + room.avg.toFixed(0) + ')');
+    ok(title.avg < room.avg * 0.75, '題名の後ろが暗くなっていない (' + title.avg.toFixed(0) + ')');
+    ok(title.bright > 150, '白い文字が出ていない = 暗幕が文字の上に乗っている (' + title.bright + ' 画素)');
+  });
+
   await t('HUD の月ボタンで、その場で灯りを消せる', async () => {
     await page.evaluate(() => { window.__app.app.settings.night = 0; window.__app.startTask('nose'); });
     await page.waitForTimeout(300);
@@ -911,7 +949,9 @@ async function screenHash(page) {
     const night = await lightStats(page);
 
     console.log('       明るさ 昼 ' + day.avg.toFixed(0) + ' / 夜 ' + night.avg.toFixed(0));
-    ok(night.avg < day.avg * 0.65, '夜のほうが暗くない (' + day.avg.toFixed(0) + ' -> ' + night.avg.toFixed(0) + ')');
+    // 端末がダークモードでも「昼だ」と分かるだけの差をつける
+    ok(day.avg > 300, '昼が明るくない (' + day.avg.toFixed(0) + ')');
+    ok(night.avg < day.avg * 0.35, '昼と夜の差が小さい (' + day.avg.toFixed(0) + ' -> ' + night.avg.toFixed(0) + ')');
     ok(night.avg > 3, '真っ暗すぎて何も見えない (' + night.avg.toFixed(1) + ')');
   });
 

@@ -23,6 +23,10 @@
   <canvas id="view"></canvas>
 
   <div id="hud" class="hud" hidden>
+    <!-- 明るい昼の画面でも文字が読めるように、上下に薄い暗幕を敷く -->
+    <div class="hud-scrim hud-scrim-top" aria-hidden="true"></div>
+    <div class="hud-scrim hud-scrim-bottom" aria-hidden="true"></div>
+
     <div class="hud-top">
       <button type="button" id="btnMenu" class="chip chip-ghost" aria-label="メニュー">≡</button>
       <button type="button" id="btnNight" class="chip chip-ghost chip-night" aria-label="部屋の明るさを切りかえる" aria-pressed="false">🌙</button>

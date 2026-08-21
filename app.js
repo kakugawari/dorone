@@ -723,15 +723,22 @@
    * 実機でも暗いところでは LED の色でしか向きが分からない。そこを練習する。
    */
   const PALETTE = {
+    // 昼。iPhone のダークモードで見ても「昼だ」と分かるように、はっきり明るくする。
+    // 家具の色は暗い部屋に合わせて選んであるので、furniture の倍率で持ち上げる。
     day: {
-      floor: '#20283f', ceiling: '#171d31', wallBack: '#1c2338', wallSide: '#1a2134',
-      gridMinor: 'rgba(150,175,230,.07)', gridMajor: 'rgba(150,175,230,.16)',
-      skirting: 'rgba(255,255,255,.10)',
-      furniture: 1, furnitureEdge: 'rgba(0,0,0,.32)',
+      floor: '#8d8b86', ceiling: '#ccd2dd', wallBack: '#b3b9c6', wallSide: '#a6acbb',
+      gridMinor: 'rgba(50,62,88,.10)', gridMajor: 'rgba(50,62,88,.22)',
+      skirting: 'rgba(255,255,255,.45)',
+      furniture: 1.55, furnitureEdge: 'rgba(30,35,50,.30)',
       shadow: 1, glow: 0,
-      ring: '255,255,255', ringOn: '126,227,164',
-      bgTop: '#131a2e', bgBottom: '#0b0e18',
-      skyTop: '#1d2b4d', skyHorizon: '#3b4d75', ground: '#26324a', edge: 'rgba(150,180,240,.35)'
+      ring: '38,55,90', ringOn: '22,130,80',
+      goal: '22,130,80',           // 台・目標の輪
+      trail: '24,92,175',          // 飛んだ跡
+      assist: '18,105,190',        // 高さの線・機首の矢印
+      hoopIdle: '48,66,102',       // これから通る輪
+      rotor: '64,84,124',          // プロペラの円盤
+      bgTop: '#9fb0cc', bgBottom: '#7d8ba6',
+      skyTop: '#79aee6', skyHorizon: '#cfe0f2', ground: '#788c6b', edge: 'rgba(255,255,255,.55)'
     },
     night: {
       floor: '#0a0d17', ceiling: '#070911', wallBack: '#0b0e19', wallSide: '#090b15',
@@ -740,10 +747,18 @@
       furniture: 0.26, furnitureEdge: 'rgba(150,175,235,.10)',
       shadow: 0.25, glow: 1,
       ring: '190,215,255', ringOn: '126,227,164',
+      goal: '126,227,164',
+      trail: '79,195,255',
+      assist: '79,195,255',
+      hoopIdle: '200,225,255',
+      rotor: '180,205,255',
       bgTop: '#070911', bgBottom: '#04060c',
       skyTop: '#04060e', skyHorizon: '#0a1020', ground: '#0b1019', edge: 'rgba(150,180,240,.14)'
     }
   };
+
+  /** 'r,g,b' + 濃さ → rgba(...)。色は必ずパレットから引く。 */
+  function rgba(rgb, a) { return 'rgba(' + rgb + ',' + a + ')'; }
 
   function pal() { return app.night ? PALETTE.night : PALETTE.day; }
 
@@ -972,7 +987,7 @@
     ctx.lineTo(-4 * dpr, 0);
     ctx.lineTo(-9 * dpr, -11 * dpr);
     ctx.closePath();
-    ctx.fillStyle = 'rgba(126,227,164,.92)';
+    ctx.fillStyle = rgba(pal().goal, 0.95);
     ctx.fill();
     ctx.restore();
 
@@ -981,7 +996,7 @@
     ctx.lineWidth = 3.5 * dpr;
     ctx.strokeStyle = 'rgba(8,11,20,.85)';
     ctx.strokeText(String(label), x * dpr - Math.cos(ang) * 22 * dpr, y * dpr - Math.sin(ang) * 22 * dpr + 4 * dpr);
-    ctx.fillStyle = 'rgba(180,255,210,.98)';
+    ctx.fillStyle = rgba(pal().goal, 1);
     ctx.fillText(String(label), x * dpr - Math.cos(ang) * 22 * dpr, y * dpr - Math.sin(ang) * 22 * dpr + 4 * dpr);
   }
 
@@ -1031,14 +1046,14 @@
     // 着陸マット / 荷物を置く台
     if (task.pad) {
       const pts = C.circlePoints(task.pad.x, 0.004, task.pad.z, task.pad.r, 32);
-      poly(cam, pts, 'rgba(126,227,164,.16)', 'rgba(126,227,164,.85)', 2);
-      strokeLoop(cam, C.circlePoints(task.pad.x, 0.005, task.pad.z, task.pad.r * 0.45, 24), 'rgba(126,227,164,.5)', 1.5);
+      poly(cam, pts, rgba(P.goal, 0.20), rgba(P.goal, 0.9), 2);
+      strokeLoop(cam, C.circlePoints(task.pad.x, 0.005, task.pad.z, task.pad.r * 0.45, 24), rgba(P.goal, 0.55), 1.5);
     }
 
     // 目標の真下 (どこを狙うかを床に出す)
     const tp = task.kind === 'hover' ? task.target : null;
     if (tp) {
-      strokeLoop(cam, C.circlePoints(tp.x, 0.003, tp.z, task.radius, 32), 'rgba(126,227,164,.35)', 1.5);
+      strokeLoop(cam, C.circlePoints(tp.x, 0.003, tp.z, task.radius, 32), rgba(P.goal, 0.40), 1.5);
     }
 
     // 飛んだ跡。濃さを 5 段階に丸めて、段ごとに 1 回で塗る (260 回 → 5 回)。
@@ -1064,7 +1079,7 @@
           addLine(cam, { x: a.x, y: 0.006, z: a.z }, { x: b.x, y: 0.006, z: b.z });
           any = true;
         }
-        if (any) strokeLines('rgba(79,195,255,' + (0.06 + band / (BANDS - 1) * 0.28).toFixed(3) + ')', 2);
+        if (any) strokeLines(rgba(P.trail, (0.10 + band / (BANDS - 1) * 0.35).toFixed(3)), 2);
       }
     }
 
@@ -1109,7 +1124,7 @@
     const tip = { x: state.pos.x + fx * L, y: 0.012, z: state.pos.z + fz * L };
     const bl = { x: state.pos.x - fx * L * 0.35 - rx * Wd, y: 0.012, z: state.pos.z - fz * L * 0.35 - rz * Wd };
     const br = { x: state.pos.x - fx * L * 0.35 + rx * Wd, y: 0.012, z: state.pos.z - fz * L * 0.35 + rz * Wd };
-    poly(cam, [tip, br, bl], 'rgba(79,195,255,.42)', 'rgba(140,220,255,.65)', 1.2);
+    poly(cam, [tip, br, bl], rgba(P.assist, 0.42), rgba(P.assist, 0.75), 1.2);
   }
 
   function collectBox(cam, box, out) {
@@ -1173,10 +1188,8 @@
 
   function shadeColor(hex, k) {
     const n = parseInt(hex.slice(1), 16);
-    const r = Math.round(((n >> 16) & 255) * k);
-    const g = Math.round(((n >> 8) & 255) * k);
-    const b = Math.round((n & 255) * k);
-    return 'rgb(' + r + ',' + g + ',' + b + ')';
+    const cap = function (v) { return Math.max(0, Math.min(255, Math.round(v * k))); };
+    return 'rgb(' + cap((n >> 16) & 255) + ',' + cap((n >> 8) & 255) + ',' + cap(n & 255) + ')';
   }
 
   function collectTargets(cam, task, run, out) {
@@ -1218,18 +1231,19 @@
       //   いまの輪   … 濃い帯 + 太いふち + ゆっくり明滅 + 大きい番号
       //   次の輪     … 中くらい
       //   その先     … 細いふちだけ (コース全体は見えるように残す)
+      const P = pal();
       const pulse = 0.84 + 0.16 * Math.sin(performance.now() * 0.0042);
       task.gates.forEach(function (g, i) {
         const step = i - run.gateIndex;
         if (step < 0 && step > -1.5) { /* 直前にくぐった輪も薄く残す */ }
         const style = step < 0
-          ? { mode: 'line', edge: 'rgba(110,125,165,.24)', lw: 1, num: 0 }
+          ? { mode: 'line', edge: rgba(P.hoopIdle, 0.24), lw: 1, num: 0 }
           : step === 0
-            ? { mode: 'full', fill: 'rgba(126,227,164,' + (0.30 * pulse).toFixed(3) + ')',
-                edge: 'rgba(150,255,190,' + pulse.toFixed(3) + ')', lw: 3, num: 1 }
+            ? { mode: 'full', fill: rgba(P.goal, (0.30 * pulse).toFixed(3)),
+                edge: rgba(P.goal, pulse.toFixed(3)), lw: 3, num: 1 }
             : step === 1
-              ? { mode: 'band', fill: 'rgba(200,225,255,.10)', edge: 'rgba(200,225,255,.48)', lw: 1.8, num: 0.55 }
-              : { mode: 'line', edge: 'rgba(200,225,255,.30)', lw: 1.3, num: 0.34 };
+              ? { mode: 'band', fill: rgba(P.hoopIdle, 0.12), edge: rgba(P.hoopIdle, 0.55), lw: 1.8, num: 0.55 }
+              : { mode: 'line', edge: rgba(P.hoopIdle, 0.34), lw: 1.3, num: 0.34 };
 
         const probe = C.projectPolygon(cam, C.ringPoints(g.x, g.y, g.z, g.r, g.nx, g.nz, 10));
         if (!probe) return;
@@ -1247,7 +1261,7 @@
             ctx.lineWidth = 4 * dpr;
             ctx.strokeStyle = 'rgba(8,11,20,.85)';
             ctx.strokeText(String(i + 1), s.x * dpr, s.y * dpr + size * 0.35);
-            ctx.fillStyle = step === 0 ? 'rgba(180,255,210,.98)' : 'rgba(210,230,255,' + style.num + ')';
+            ctx.fillStyle = step === 0 ? rgba(P.goal, 1) : rgba(P.hoopIdle, style.num);
             ctx.fillText(String(i + 1), s.x * dpr, s.y * dpr + size * 0.35);
           }
         });
@@ -1390,8 +1404,9 @@
       }
       const spinning = state.flying || state.throttleVis > 0.05;
       const dk = pal().glow ? 0.22 : 1;
-      poly(cam, disc, 'rgba(180,205,255,' + ((spinning ? 0.13 : 0.05) * dk).toFixed(3) + ')',
-        'rgba(190,215,255,' + ((spinning ? 0.30 : 0.22) * dk).toFixed(3) + ')', 1);
+      const rot = pal().rotor;
+      poly(cam, disc, rgba(rot, ((spinning ? 0.16 : 0.06) * dk).toFixed(3)),
+        rgba(rot, ((spinning ? 0.38 : 0.26) * dk).toFixed(3)), 1);
       // 羽根
       const dir = (idx === 0 || idx === 3) ? 1 : -1;
       const phase = state.spin * dir + idx * 0.8;
@@ -1402,7 +1417,7 @@
         const p2 = bw(state, m.x - Math.cos(a) * rotR * 0.1, 0.013, m.z - Math.sin(a) * rotR * 0.1);
         addLine(cam, { x: p1.x, y: p1.y, z: p1.z }, { x: p2.x, y: p2.y, z: p2.z });
       }
-      strokeLines('rgba(215,230,255,' + (pal().glow ? 0.22 : 0.5) + ')', 2);
+      strokeLines(rgba(pal().rotor, pal().glow ? 0.30 : 0.6), 2);
       // モーター
       const hs = C.projectPoint(cam, { x: hub.x, y: hub.y, z: hub.z });
       if (hs) {
@@ -1417,7 +1432,7 @@
       const foot = { x: state.pos.x, y: 0.01, z: state.pos.z };
       ctx.save();
       ctx.setLineDash([5 * dpr, 5 * dpr]);
-      line3(cam, foot, { x: state.pos.x, y: state.pos.y - 0.02, z: state.pos.z }, 'rgba(79,195,255,.45)', 1.5);
+      line3(cam, foot, { x: state.pos.x, y: state.pos.y - 0.02, z: state.pos.z }, rgba(pal().assist, 0.55), 1.5);
       ctx.restore();
     }
 
