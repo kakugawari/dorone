@@ -673,6 +673,38 @@ async function screenHash(page) {
     ok(up > idle + 8, '音が変わらない ' + idle.toFixed(0) + 'Hz -> ' + up.toFixed(0) + 'Hz');
   });
 
+  await t('実測でも、実機なみの高さで回っている', async () => {
+    // 数字 (motorHz) ではなく、出ている音を FFT で見る。
+    // 実機 (65mm 2 枚羽・コアレス) はホバリングで 2 万回転を超える。
+    //
+    // 飛ばして測ると、指を離した時点でスロットルが戻ってしまう
+    // (throttleVis は 1/6 秒で落ちつく)。スティックの値を決め打ちにして測る。
+    const hz = async (spin) => page.evaluate(async (sp) => {
+      const app = window.__app.app;
+      app.settings.sound = 0;          // アプリ側からの更新を止める
+      window.Sound.level();            // 解析器をつなぐ
+      const p = window.Core.audioParams(
+        { throttleVis: sp, flying: true, crashed: false, vel: { x: 0, y: 0, z: 0 }, battery: 1 },
+        { battery: 0, lowBattery: 0.07 });
+      const t0 = performance.now();
+      while (performance.now() - t0 < 800) {
+        window.Sound.update(p);
+        await new Promise(r => setTimeout(r, 16));
+      }
+      const v = window.Sound.__topHz();
+      app.settings.sound = 1;
+      return v;
+    }, spin);
+
+    await page.evaluate(() => window.__app.startTask('hover'));
+    await page.waitForTimeout(200);
+    const hov = await hz(0.55);        // ホバリング (スティック中央)
+    const full = await hz(1.0);        // 上げきり
+    console.log('       実測の高さ ホバリング ' + Math.round(hov) + 'Hz / 上げきり ' + Math.round(full) + 'Hz');
+    ok(hov > 280, 'ホバリングが低すぎる。扇風機に聞こえる (' + Math.round(hov) + 'Hz)');
+    ok(full > hov + 80, 'スロットルで上がっていない ' + Math.round(hov) + ' -> ' + Math.round(full));
+  });
+
   await t('飛ばすと、本当に波形が出ている (無音になっていない)', async () => {
     // 「motorGain の数字が上がった」だけでは、音が出ている証拠にならない。
     // master の出口を解析器で測る。

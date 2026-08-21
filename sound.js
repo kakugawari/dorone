@@ -295,8 +295,21 @@
     return m;
   }
 
+  /** いちばん強く出ている周波数 (Hz)。テストから「本当にその高さで鳴っているか」を測る。 */
+  function topHz() {
+    if (!analyser) { level(); if (!analyser) return 0; }
+    const bins = new Float32Array(analyser.frequencyBinCount);
+    analyser.getFloatFrequencyData(bins);
+    const step = ctx.sampleRate / analyser.fftSize;
+    let best = -Infinity, at = 0;
+    for (let i = Math.ceil(80 / step); i < bins.length && i * step < 1500; i++) {
+      if (bins[i] > best) { best = bins[i]; at = i * step; }
+    }
+    return at;
+  }
+
   root.Sound = {
-    start: start, resume: resume, level: level, __peak: peak, update: update, setMuted: setMuted, isMuted: isMuted,
+    start: start, resume: resume, level: level, __peak: peak, __topHz: topHz, update: update, setMuted: setMuted, isMuted: isMuted,
     isRunning: isRunning, cue: cue, thud: thud, beep: beep, testTone: testTone,
     // テストからのぞく用
     debug: function () {
