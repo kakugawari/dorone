@@ -920,6 +920,41 @@ async function screenHash(page) {
     }, { b64: shot, y: yCss, h: hCss });
   }
 
+  await t('明るい昼でも、目標の輪 (緑) がはっきり見える', async () => {
+    async function greenPixels(night) {
+      return page.evaluate((n) => {
+        const app = window.__app.app;
+        app.settings.night = n;
+        window.__app.startTask('hover');
+        // 飛ばして測ると、流れで輪から出ることがあってブレる。
+        // 輪の真ん中に置いて、解像度も固定して測る。
+        const t = app.run.task.target;
+        app.state.pos = { x: t.x, y: t.y, z: t.z };
+        app.state.vel = { x: 0, y: 0, z: 0 };
+        app.state.flying = true;
+        app.run.inZone = true;
+        window.__app.setRenderScale(2);
+        for (let i = 0; i < 4; i++) window.__app.updateCam(3);
+        window.__app.bench.drawScene();
+        const cv = document.getElementById('view');
+        const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+        let g2 = 0;
+        for (let i = 0; i < d.length; i += 4) {
+          const r = d[i], g = d[i + 1], b = d[i + 2];
+          if (g > r + 22 && g > b + 22 && g > 70) g2++;
+        }
+        return g2;
+      }, night);
+    }
+    const day = await greenPixels(0);
+    const night = await greenPixels(1);
+    console.log('       緑の画素 昼 ' + day + ' / 夜 ' + night);
+    // 細い線 1 本だと 1 万を切る。帯にしてあれば十分見える。
+    ok(day > 18000, '昼に目標の輪が沈んでいる (' + day + ' 画素)');
+    ok(night > 18000, '夜に目標の輪が沈んでいる (' + night + ' 画素)');
+    await page.evaluate(() => { window.__app.app.settings.night = 0; });
+  });
+
   await t('明るい昼でも、上に出る文字が読める (暗幕が中身の後ろにある)', async () => {
     await page.evaluate(() => { window.__app.app.settings.night = 0; window.__app.startTask('hover'); });
     await page.waitForTimeout(300);
@@ -1016,30 +1051,33 @@ async function screenHash(page) {
   });
 
   await t('影は 1 枚のべた塗りでなく、高いほど広がる', async () => {
+    // 目標の輪が床に色を塗るので、部屋では影だけを測れない。
+    // 輪のない広場で測る。
+    await page.evaluate(() => { window.__app.app.settings.night = 0; window.__app.startTask('free'); });
+    await page.waitForTimeout(300);
     async function shadowWidth(y) {
       return page.evaluate((h) => {
         const C = window.Core, app = window.__app.app;
-        app.settings.night = 0; app.night = false;
-        app.state.pos = { x: 0, y: h, z: 2.0 };
+        app.state.pos = { x: 0, y: h, z: -3.5 };
         app.state.vel = { x: 0, y: 0, z: 0 };
         app.state.flying = true;
-        app.cam.yaw = 0; app.cam.pitch = -0.35;
+        app.cam.yaw = 0; app.cam.pitch = -0.48;
         window.__app.bench.drawScene();
-        const foot = C.projectPoint(app.cam, { x: 0, y: 0.008, z: 2.0 });
+        const foot = C.projectPoint(app.cam, { x: 0, y: 0.008, z: -3.5 });
         const cv = document.getElementById('view');
         const sc = window.__app.renderScale();
-        const row = Math.round(foot.y * sc);
-        const d = cv.getContext('2d').getImageData(0, row, cv.width, 1).data;
-        // その行の端 (影のない床) を基準に、それより暗い画素の幅を数える
+        const d = cv.getContext('2d').getImageData(0, Math.round(foot.y * sc), cv.width, 1).data;
+        // その行の端 (影のない地面) を基準に、それより暗い画素の幅を数える
         const floor = d[0] + d[1] + d[2];
         let n = 0;
-        for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] < floor * 0.97) n++;
+        for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] < floor * 0.94) n++;
         return n;
       }, y);
     }
     const low = await shadowWidth(0.25);
     const mid = await shadowWidth(1.0);
-    const high = await shadowWidth(1.8);
+    const high = await shadowWidth(2.2);
+    console.log('       影の幅 0.25m:' + low + '  1.0m:' + mid + '  2.2m:' + high);
     ok(low > 20, '影が見えない');
     ok(mid > low && high > mid, '高くしても影が広がらない (' + low + ' / ' + mid + ' / ' + high + ')');
   });

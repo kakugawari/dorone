@@ -731,8 +731,8 @@
       skirting: 'rgba(255,255,255,.45)',
       furniture: 1.55, furnitureEdge: 'rgba(30,35,50,.30)',
       shadow: 1, glow: 0,
-      ring: '38,55,90', ringOn: '22,130,80',
-      goal: '22,130,80',           // 台・目標の輪
+      ring: '38,55,90', ringOn: '13,146,84',
+      goal: '13,146,84',           // 台・目標の輪
       trail: '24,92,175',          // 飛んだ跡
       assist: '18,105,190',        // 高さの線・機首の矢印
       hoopIdle: '48,66,102',       // これから通る輪
@@ -863,6 +863,31 @@
       if (pi && style.mode === 'full') { ctx.beginPath(); tracePts(pi.pts); ctx.stroke(); }
     }
     return po;
+  }
+
+  /**
+   * 水平な輪を帯で描く。細い線 1 本だと、明るい床の上で沈んで見える。
+   * 外周と内周の 2 つの円を作って、そのあいだを塗る。
+   */
+  function drawFlatRing(cam, cx, cy, cz, r, half, fill, edge, lw) {
+    const outer = C.circlePoints(cx, cy, cz, r * (1 + half), 30);
+    const inner = C.circlePoints(cx, cy, cz, r * (1 - half), 30);
+    const po = C.projectPolygon(cam, outer);
+    if (!po) return;
+    const pi = C.projectPolygon(cam, inner);
+    if (fill) {
+      ctx.beginPath();
+      tracePts(po.pts);
+      if (pi) tracePts(pi.pts);
+      ctx.fillStyle = fill;
+      ctx.fill('evenodd');
+    }
+    if (edge) {
+      ctx.strokeStyle = edge;
+      ctx.lineWidth = (lw || 2) * dpr;
+      ctx.beginPath(); tracePts(po.pts); ctx.stroke();
+      if (pi) { ctx.beginPath(); tracePts(pi.pts); ctx.stroke(); }
+    }
   }
 
   function strokeLoop(cam, pts, color, lw) {
@@ -1046,14 +1071,16 @@
     // 着陸マット / 荷物を置く台
     if (task.pad) {
       const pts = C.circlePoints(task.pad.x, 0.004, task.pad.z, task.pad.r, 32);
-      poly(cam, pts, rgba(P.goal, 0.20), rgba(P.goal, 0.9), 2);
-      strokeLoop(cam, C.circlePoints(task.pad.x, 0.005, task.pad.z, task.pad.r * 0.45, 24), rgba(P.goal, 0.55), 1.5);
+      poly(cam, pts, rgba(P.goal, 0.24), rgba(P.goal, 0.95), 3);
+      strokeLoop(cam, C.circlePoints(task.pad.x, 0.005, task.pad.z, task.pad.r * 0.45, 24), rgba(P.goal, 0.6), 2);
     }
 
     // 目標の真下 (どこを狙うかを床に出す)
     const tp = task.kind === 'hover' ? task.target : null;
     if (tp) {
-      strokeLoop(cam, C.circlePoints(tp.x, 0.003, tp.z, task.radius, 32), rgba(P.goal, 0.40), 1.5);
+      // 目標の真下。うっすら塗って「この範囲」と分かるようにする。
+      const foot = C.circlePoints(tp.x, 0.003, tp.z, task.radius, 32);
+      poly(cam, foot, rgba(P.goal, 0.12), rgba(P.goal, 0.55), 2.2);
     }
 
     // 飛んだ跡。濃さを 5 段階に丸めて、段ごとに 1 回で塗る (260 回 → 5 回)。
@@ -1197,20 +1224,33 @@
       const t = task.target;
       const inZone = run.inZone;
       const P = pal();
-      const col = 'rgba(' + (inZone ? P.ringOn : P.ring) + ',';
+      const rgb = inZone ? P.ringOn : P.ring;
+      const pulse2 = inZone ? 0.86 + 0.14 * Math.sin(performance.now() * 0.0045) : 1;
       // 上下の帯を 3 本の輪で示す = 「この筒の中にいろ」
-      [[t.y - task.band, 0.30], [t.y, 0.85], [t.y + task.band, 0.30]].forEach(function (lv) {
-        const pts = C.circlePoints(t.x, lv[0], t.z, task.radius, 30);
+      // まん中の輪は帯で塗る。ここが「狙う高さ」なので、いちばんはっきりさせる。
+      const mid = C.circlePoints(t.x, t.y, t.z, task.radius, 30);
+      const midPr = C.projectPolygon(cam, mid);
+      if (midPr) {
+        out.push({
+          depth: midPr.depth - 0.002,
+          draw: function () {
+            drawFlatRing(cam, t.x, t.y, t.z, task.radius, 0.055,
+              rgba(rgb, (0.42 * pulse2).toFixed(3)), rgba(rgb, pulse2.toFixed(3)), 2.5);
+          }
+        });
+      }
+      [t.y - task.band, t.y + task.band].forEach(function (y) {
+        const pts = C.circlePoints(t.x, y, t.z, task.radius, 30);
         const pr = C.projectPolygon(cam, pts);
         if (!pr) return;
-        out.push({ depth: pr.depth, draw: function () { strokeLoop(cam, pts, col + lv[1] + ')', lv[1] > 0.5 ? 2.5 : 1.4); } });
+        out.push({ depth: pr.depth, draw: function () { strokeLoop(cam, pts, rgba(rgb, 0.55), 2.2); } });
       });
       // 筒の縦の柱
       for (let i = 0; i < 4; i++) {
         const a = i / 4 * Math.PI * 2;
         const px = t.x + Math.cos(a) * task.radius, pz = t.z + Math.sin(a) * task.radius;
         const A = { x: px, y: t.y - task.band, z: pz }, B = { x: px, y: t.y + task.band, z: pz };
-        out.push({ depth: C.worldToView(cam, A).z, draw: function () { line3(cam, A, B, col + '0.30)', 1.2); } });
+        out.push({ depth: C.worldToView(cam, A).z, draw: function () { line3(cam, A, B, rgba(rgb, 0.42), 1.8); } });
       }
     } else if (task.kind === 'altitude') {
       // 高さの帯を、部屋いっぱいの面で示す
@@ -1223,7 +1263,7 @@
         if (!pr) return;
         const P = pal();
         const col = 'rgba(' + (run.inZone ? P.ringOn : P.ring) + ',';
-        out.push({ depth: pr.depth, draw: function () { strokeLoop(cam, pts, col + lv[1] + ')', lv[1] > 0.5 ? 2 : 1); } });
+        out.push({ depth: pr.depth, draw: function () { strokeLoop(cam, pts, col + lv[1] + ')', lv[1] > 0.5 ? 3 : 1.8); } });
       });
     } else if (task.kind === 'gates') {
       // 「いま狙う輪」だけがはっきり分かるように、はっきり差をつける。
