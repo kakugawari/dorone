@@ -99,7 +99,8 @@ body {
   backdrop-filter: blur(8px);
 }
 .chip:active { background: var(--panel-2); }
-.chip-night { font-size: 17px; }
+.chip-night, .chip-stand { font-size: 17px; }
+.chip-stand { border-color: rgba(79,195,255,.55); }
 .chip-night[aria-pressed="true"] { border-color: rgba(255,196,84,.6); background: rgba(46,36,16,.85); }
 
 .hud-task { flex: 1 1 auto; min-width: 0; text-align: center; }
@@ -397,7 +398,8 @@ body {
 }
 
 .menu-head h1 { font-size: 23px; margin: 0 0 6px; letter-spacing: .01em; }
-.menu-head .sub { margin: 0 0 20px; color: var(--ink-dim); font-size: 13px; line-height: 1.65; }
+.menu-head .sub { margin: 0 0 20px; color: var(--ink-dim); font-size: 13px; line-height: 1.75; }
+.menu-head .sub b { color: var(--ink); font-weight: 600; }
 
 .section-title {
   font-size: 12px;

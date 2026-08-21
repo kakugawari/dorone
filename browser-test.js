@@ -719,6 +719,100 @@ async function screenHash(page) {
     ok(r.success, 'くぐれなかった (ゲート ' + r.gates + ' / ' + r.why + ')');
   });
 
+  console.log('\n■ 立ち位置を動かす');
+
+  await t('画面をなぞると自分が歩く。指を右へ動かすと世界も右へ動く', async () => {
+    await page.evaluate(() => { window.__app.app.settings.night = 0; window.__app.startTask('hover'); });
+    await page.waitForTimeout(400);
+    await page.evaluate(() => window.__app.simulate(3, (s) => ({ throttle: s.pos.y < 1.0 ? 0.7 : 0, yaw: 0, pitch: 0, roll: 0 })));
+    await page.waitForTimeout(200);
+
+    const before = await page.evaluate(() => ({ x: window.__app.app.cam.pos.x, z: window.__app.app.cam.pos.z }));
+    // 画面の空いている所 (スティックより上、HUD の文字より下) をなぞる
+    const vp = page.viewportSize();
+    const y = Math.round(vp.height * 0.42);
+    await finger.down(1, vp.width * 0.5, y);
+    for (let i = 1; i <= 8; i++) await finger.move(1, vp.width * 0.5 + i * 9, y);
+    await finger.upAll();
+    await page.waitForTimeout(200);
+    const after = await page.evaluate(() => ({ x: window.__app.app.cam.pos.x, z: window.__app.app.cam.pos.z }));
+    const moved = Math.hypot(after.x - before.x, after.z - before.z);
+    ok(moved > 0.15, '歩いていない (' + moved.toFixed(3) + 'm)');
+    ok(await page.evaluate(() => window.__app.pilotMoved()), '動いた判定にならない');
+  });
+
+  await t('立ち位置を動かすと、見える絵も変わる', async () => {
+    const a = await screenHash(page);
+    await page.evaluate(() => window.__app.movePilot(0.8, 0.5));
+    await page.waitForTimeout(250);
+    ok(await screenHash(page) !== a, '絵が変わらない');
+  });
+
+  await t('🧍 でもとの立ち位置に戻る', async () => {
+    ok(await page.locator('#btnStand').isVisible(), '戻すボタンが出ていない');
+    await page.locator('#btnStand').tap();
+    await page.waitForTimeout(250);
+    ok(!await page.evaluate(() => window.__app.pilotMoved()), '戻っていない');
+    ok(await page.locator('#btnStand').isHidden(), 'ボタンが残っている');
+  });
+
+  await t('壁や家具を抜けて外に出られない', async () => {
+    const r = await page.evaluate(() => {
+      const C = window.Core, app = window.__app.app;
+      const out = [];
+      // 四方八方へ思いきり歩いてみる
+      for (const [dx, dz] of [[-50, 0], [50, 0], [0, -50], [0, 50], [-50, -50], [50, 50]]) {
+        window.__app.movePilot(dx, dz);
+        const p = app.cam.pos, room = app.env.room;
+        if (p.x <= room.minX || p.x >= room.maxX || p.z <= room.minZ || p.z >= room.maxZ) {
+          out.push('部屋の外 ' + p.x.toFixed(2) + ',' + p.z.toFixed(2));
+        }
+        for (const f of room.furniture) {
+          if (f.max.y < 0.60) continue;
+          const cx = C.clamp(p.x, f.min.x, f.max.x), cz = C.clamp(p.z, f.min.z, f.max.z);
+          if (Math.hypot(p.x - cx, p.z - cz) < 0.31) out.push(f.name + ' にめり込んだ');
+        }
+      }
+      window.__app.resetPilot();
+      return out;
+    });
+    ok(r.length === 0, r.join(' / '));
+  });
+
+  await t('立ち位置を変えると、対面の判定もそちらを向く', async () => {
+    const r = await page.evaluate(() => {
+      const C = window.Core, T = window.Tasks;
+      window.__app.startTask('nose');
+      const app = window.__app.app;
+      const s = app.state;
+      s.pos = { x: 0, y: 1.2, z: 2.0 };
+      s.yaw = Math.PI;                       // 機首は手前 (もとの立ち位置) を向く
+      const atHome = T.isFacingPilot(s, app.env.room.pilot, 35 * Math.PI / 180);
+      window.__app.movePilot(2.2, 2.6);      // 右奥へ歩く
+      const afterMove = T.isFacingPilot(s, app.env.room.pilot, 35 * Math.PI / 180);
+      window.__app.resetPilot();
+      return { atHome: atHome, afterMove: afterMove, pilot: app.env.room.pilot.z };
+    });
+    ok(r.atHome, 'もとの位置では対面のはず');
+    ok(!r.afterMove, '歩いても対面のまま (立ち位置が判定に効いていない)');
+  });
+
+  await t('スティックは、立ち位置の操作にじゃまされない', async () => {
+    await page.evaluate(() => window.__app.startTask('hover'));
+    await page.waitForTimeout(300);
+    const c = await centerOf(page, '#stickL');
+    const before = await page.evaluate(() => ({ x: window.__app.app.cam.pos.x, z: window.__app.app.cam.pos.z }));
+    await finger.down(1, c.x, c.y);
+    for (let i = 1; i <= 6; i++) await finger.move(1, c.x + i * 6, c.y - i * 6);
+    await page.waitForTimeout(120);
+    const i = await page.evaluate(() => window.__app.app.input);
+    await finger.upAll();
+    await page.waitForTimeout(150);
+    const after = await page.evaluate(() => ({ x: window.__app.app.cam.pos.x, z: window.__app.app.cam.pos.z }));
+    ok(i.throttle > 0.3, 'スティックが効いていない');
+    near(Math.hypot(after.x - before.x, after.z - before.z), 0, 1e-6, 'スティックを触ったら歩いてしまった');
+  });
+
   console.log('\n■ 広場 (自由に飛ぶ)');
 
   await t('広場は壁も天井もない。ぶつけても止まらず、置きなおして続けられる', async () => {

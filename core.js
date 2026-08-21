@@ -275,6 +275,49 @@
     };
   }
 
+  /**
+   * 立ち位置を、その場所の中で家具にめり込まない所に丸める。
+   * 人は上から見た円 (半径 0.32m) として扱う。
+   * 低いもの (コーンなど) はまたげるので、通り抜けられる。
+   */
+  function clampPilot(room, x, z, radius) {
+    const r = radius == null ? 0.32 : radius;
+    const inBounds = function () {
+      x = clamp(x, room.minX + r, room.maxX - r);
+      z = clamp(z, room.minZ + r, room.maxZ - r);
+    };
+    inBounds();
+    // 角で挟まれることがあるので、数回まわして押し出す
+    for (let pass = 0; pass < 3; pass++) {
+      let moved = false;
+      for (const f of room.furniture) {
+        if (f.max.y < 0.60) continue;              // 低いものはまたげる
+        const cx = clamp(x, f.min.x, f.max.x);
+        const cz = clamp(z, f.min.z, f.max.z);
+        let dx = x - cx, dz = z - cz;
+        let d = Math.hypot(dx, dz);
+        if (d >= r) continue;
+        if (d < 1e-6) {
+          // 中に入ってしまった。いちばん近い面へ出す。
+          const outs = [
+            [f.min.x - r - x, -1, 0], [f.max.x + r - x, 1, 0],
+            [f.min.z - r - z, 0, -1], [f.max.z + r - z, 0, 1]
+          ];
+          outs.sort(function (a, b) { return Math.abs(a[0]) - Math.abs(b[0]); });
+          x += outs[0][1] ? outs[0][0] : 0;
+          z += outs[0][2] ? outs[0][0] : 0;
+        } else {
+          x = cx + dx / d * r;
+          z = cz + dz / d * r;
+        }
+        moved = true;
+      }
+      inBounds();
+      if (!moved) break;
+    }
+    return { x: x, z: z };
+  }
+
   // ------------------------------------------------------------------
   // 機体の状態
   // ------------------------------------------------------------------
@@ -930,7 +973,7 @@
     DEG, TAU, NEAR,
     mulberry32, clamp, wrapPi, approachK, dist2,
     DEFAULT_CONFIG, makeConfig, randomizeDrift,
-    part, decalX, bookSpines, createRoom, createField, createState, step, driftAt, throttleToThrust, headingVectors, closestOnBox,
+    part, decalX, bookSpines, createRoom, createField, clampPilot, createState, step, driftAt, throttleToThrust, headingVectors, closestOnBox,
     createPayload, updatePayload, createCat, updateCat,
     batteryLoad, batterySeconds, audioParams,
     makeCamera, worldToView, projectView, projectPoint, projectPolygon,

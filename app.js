@@ -117,7 +117,7 @@
   ['view', 'hud', 'controls', 'menu', 'result', 'btnMenu', 'btnTakeoff', 'btnRetry',
     'hudTaskName', 'hudTaskGoal', 'hudTime', 'hudProgress', 'gaugeAlt', 'gaugeSpd',
     'hdArrow', 'gaugeFps', 'hudToast', 'hudGauges', 'taskList', 'stickL', 'stickR', 'hudProgressBar',
-    'gaugeBattery', 'batteryPct', 'batteryLeft', 'batteryFill', 'btnBattery', 'setBattery', 'btnNight',
+    'gaugeBattery', 'batteryPct', 'batteryLeft', 'batteryFill', 'btnBattery', 'setBattery', 'btnNight', 'btnStand',
     'setSound', 'setNight', 'nightNote', 'btnReplay', 'replay', 'replaySeek', 'replayPlay', 'replayTime',
     'replayClose', 'replayStickL', 'replayStickR', 'replayNote', 'batteryNote',
     'knobL', 'knobR', 'labelL', 'labelR', 'resVerdict', 'resStars', 'resMsg',
@@ -216,6 +216,83 @@
     }
   }
 
+  // ================================================================
+  // 立ち位置を動かす
+  //
+  // 実機では「自分が動いて対面を避ける」のが定石。ここでも動けるようにする。
+  // 画面の空いている所をなぞると歩く。地図と同じで「世界をつかんで引っぱる」感覚。
+  // ================================================================
+  const walk = { id: null, x: 0, y: 0, moved: false };
+
+  function homePilot() {
+    return app.run && app.run.task.field ? C.createField().pilot : C.createRoom().pilot;
+  }
+
+  function pilotMoved() {
+    const h = homePilot();
+    return Math.hypot(app.cam.pos.x - h.x, app.cam.pos.z - h.z) > 0.05;
+  }
+
+  /** 立ち位置を (dx, dz) だけずらす。壁と家具は抜けられない。 */
+  function movePilot(dx, dz) {
+    const room = app.env.room;
+    const p = C.clampPilot(room, app.cam.pos.x + dx, app.cam.pos.z + dz);
+    app.cam.pos.x = p.x;
+    app.cam.pos.z = p.z;
+    // 対面かどうかの判定も、いまの立ち位置で行う (tasks.js が room.pilot を見る)
+    room.pilot.x = p.x;
+    room.pilot.z = p.z;
+    updateStandButton();
+  }
+
+  function resetPilot() {
+    const h = homePilot();
+    const room = app.env.room;
+    app.cam.pos.x = room.pilot.x = h.x;
+    app.cam.pos.y = room.pilot.y = h.y;
+    app.cam.pos.z = room.pilot.z = h.z;
+    updateStandButton();
+  }
+
+  function updateStandButton() {
+    els.btnStand.hidden = !(app.screen === 'flight' && pilotMoved());
+  }
+
+  function bindWalk() {
+    els.view.addEventListener('pointerdown', function (e) {
+      if (app.screen !== 'flight' || walk.id !== null) return;
+      walk.id = e.pointerId;
+      walk.x = e.clientX; walk.y = e.clientY;
+      walk.moved = false;
+      els.view.setPointerCapture(e.pointerId);
+    });
+    els.view.addEventListener('pointermove', function (e) {
+      if (e.pointerId !== walk.id || !app.cam) return;
+      const dxPx = e.clientX - walk.x, dyPx = e.clientY - walk.y;
+      walk.x = e.clientX; walk.y = e.clientY;
+      if (Math.abs(dxPx) + Math.abs(dyPx) < 0.5) return;
+
+      // 1 画素あたりの世界の長さ。機体までの距離を基準にすると、
+      // 「見えているものをつかんで動かしている」感じになる。
+      const d = clamp(Math.hypot(app.state.pos.x - app.cam.pos.x, app.state.pos.z - app.cam.pos.z), 1.2, 8);
+      const scale = d / C.focalLength(app.cam);
+      const c = Math.cos(app.cam.yaw), sn = Math.sin(app.cam.yaw);
+      const right = { x: c, z: -sn }, fwd = { x: sn, z: c };
+      // 指を左へ = 世界が左へ = 自分は右へ / 指を下へ = 自分は前へ
+      const mr = -dxPx * scale;
+      const mf = dyPx * scale * 1.4;      // 縦は遠近で効きが鈍いので少し強く
+      movePilot(right.x * mr + fwd.x * mf, right.z * mr + fwd.z * mf);
+      if (!walk.moved && pilotMoved()) {
+        walk.moved = true;
+        toast('立ち位置が変わりました。🧍 でもとに戻せます', 2600);
+      }
+    });
+    const end = function (e) { if (e.pointerId === walk.id) walk.id = null; };
+    els.view.addEventListener('pointerup', end);
+    els.view.addEventListener('pointercancel', end);
+    els.view.addEventListener('lostpointercapture', end);
+  }
+
   // ---------------------------------------------------------------- キーボード (PC 確認用)
   const keys = Object.create(null);
   window.addEventListener('keydown', function (e) {
@@ -268,7 +345,9 @@
     resetSoundMemory();
     if (!app.settings.altHold) { sticks[side].y = -1; sticks[side].knobY = -1; }
 
+    // カメラの位置は room.pilot と同じものを指す (立ち位置を動かすと両方動く)
     app.cam = C.makeCamera({ pos: app.env.room.pilot, yaw: 0, pitch: 0 });
+    app.cam.pos = app.env.room.pilot;
     // いきなり床のドローンを見おろすと、浮いたときに機体が画面の上に飛ぶ。
     // 最初から「これから浮く高さ」あたりを見ておく。
     aimCameraAt({ x: task.start.x, y: 0.9, z: task.start.z });
@@ -279,6 +358,7 @@
     app.lastFrame = 0;
     setScreen('flight');
     updateStickLabels();
+    updateStandButton();
     toast(task.hint, 4200);
     if (app.ghost) {
       // 遅らせて出すあいだに別の課題へ移ることがある。
@@ -1788,6 +1868,11 @@
     syncSettingsUI();
 
     els.btnMenu.addEventListener('click', function () { app.paused = true; setScreen('menu'); });
+    els.btnStand.addEventListener('click', function () {
+      resetPilot();
+      toast('立ち位置をもとに戻しました', 1800);
+    });
+    bindWalk();
     els.btnNight.addEventListener('click', function () {
       app.settings.night = app.settings.night ? 0 : 1;
       saveSoon();
@@ -1867,6 +1952,9 @@
       setBattery: function (v) { app.battery = v; if (app.state) app.state.battery = v; },
       isNight: function () { return app.night; },
       applyNight: applyNight,
+      movePilot: movePilot,
+      resetPilot: resetPilot,
+      pilotMoved: pilotMoved,
       resize: resize,
       // 速さの計測用。どこが重いかを部品ごとに測れるようにする。
       bench: { drawScene: drawScene, renderKnobs: renderKnobs, updateHUD: updateHUD, readSticks: readSticks },

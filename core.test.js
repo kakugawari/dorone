@@ -814,3 +814,50 @@ test('本の並びは seed から決まる (毎回同じ)', () => {
   const b = C.createRoom().decals.map(d => d.color + d.pts[0].z.toFixed(4)).join(',');
   assert.strictEqual(a, b);
 });
+
+// ---------------------------------------------------------------- 立ち位置
+
+test('立ち位置は場所の外に出られない', () => {
+  const room = C.createRoom();
+  for (const [x, z] of [[-99, 0], [99, 0], [0, -99], [0, 99]]) {
+    const p = C.clampPilot(room, x, z);
+    assert.ok(p.x > room.minX && p.x < room.maxX, '横に出た: ' + p.x);
+    assert.ok(p.z > room.minZ && p.z < room.maxZ, '奥行きに出た: ' + p.z);
+  }
+});
+
+test('立ち位置は家具にめり込まない (中から始めても押し出される)', () => {
+  const room = C.createRoom();
+  const tall = room.furniture.filter(f => f.max.y >= 0.60);
+  const spots = [];
+  for (const f of tall) {
+    spots.push([(f.min.x + f.max.x) / 2, (f.min.z + f.max.z) / 2]);   // ど真ん中
+    spots.push([f.min.x - 0.1, (f.min.z + f.max.z) / 2]);             // すぐ横
+    spots.push([(f.min.x + f.max.x) / 2, f.max.z + 0.1]);
+  }
+  for (const [x, z] of spots) {
+    const p = C.clampPilot(room, x, z);
+    for (const f of tall) {
+      const cx = C.clamp(p.x, f.min.x, f.max.x), cz = C.clamp(p.z, f.min.z, f.max.z);
+      assert.ok(Math.hypot(p.x - cx, p.z - cz) >= 0.319,
+        '(' + x.toFixed(2) + ',' + z.toFixed(2) + ') から出したら「' + f.name + '」に重なった');
+    }
+  }
+});
+
+test('低いものはまたげる (コーンは通り抜けられる)', () => {
+  const field = C.createField();
+  const cone = field.furniture.find(f => f.name === 'コーン' && f.max.y > 0.5);
+  const cx = (cone.min.x + cone.max.x) / 2, cz = (cone.min.z + cone.max.z) / 2;
+  const p = C.clampPilot(field, cx, cz);
+  assert.ok(Math.abs(p.x - cx) < 1e-9 && Math.abs(p.z - cz) < 1e-9, 'コーンに押し返された');
+});
+
+test('家具に触れていない立ち位置は動かされない', () => {
+  const room = C.createRoom();
+  for (const [x, z] of [[0, 0], [0.5, 1.5], [1.6, 2.0], [-0.2, -0.5]]) {
+    const p = C.clampPilot(room, x, z);
+    assert.ok(Math.abs(p.x - x) < 1e-9 && Math.abs(p.z - z) < 1e-9,
+      '(' + x + ',' + z + ') が (' + p.x.toFixed(2) + ',' + p.z.toFixed(2) + ') に動かされた');
+  }
+});
