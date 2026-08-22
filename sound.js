@@ -275,7 +275,9 @@
     if (!ctx || !master) return 0;
     if (!analyser) {
       analyser = ctx.createAnalyser();
-      analyser.fftSize = 2048;
+      analyser.fftSize = 4096;
+      // 既定では過去 8 割を引きずる。測るたびに違う値になるので切る。
+      analyser.smoothingTimeConstant = 0;
       // 出口 (リミッターのあと) を測る。ここが実際にスピーカーへ行く音。
       (limiter || master).connect(analyser);
     }
@@ -295,17 +297,25 @@
     return m;
   }
 
-  /** いちばん強く出ている周波数 (Hz)。テストから「本当にその高さで鳴っているか」を測る。 */
+  /**
+   * 基音の高さ (Hz)。テストから「本当にその高さで回っているか」を測る。
+   *
+   * いちばん強い山をそのまま返すと、倍音を拾って 3 倍の値が出ることがある。
+   * いちばん強い山から 6dB 以内にある山のうち、**いちばん低いもの**を基音とみなす。
+   */
   function topHz() {
     if (!analyser) { level(); if (!analyser) return 0; }
     const bins = new Float32Array(analyser.frequencyBinCount);
     analyser.getFloatFrequencyData(bins);
     const step = ctx.sampleRate / analyser.fftSize;
-    let best = -Infinity, at = 0;
-    for (let i = Math.ceil(80 / step); i < bins.length && i * step < 1500; i++) {
-      if (bins[i] > best) { best = bins[i]; at = i * step; }
+    const lo = Math.ceil(120 / step), hi = Math.min(bins.length - 2, Math.floor(1400 / step));
+    let best = -Infinity;
+    for (let i = lo; i <= hi; i++) if (bins[i] > best) best = bins[i];
+    if (best === -Infinity) return 0;
+    for (let i = lo; i <= hi; i++) {
+      if (bins[i] >= best - 6 && bins[i] >= bins[i - 1] && bins[i] >= bins[i + 1]) return i * step;
     }
-    return at;
+    return 0;
   }
 
   root.Sound = {

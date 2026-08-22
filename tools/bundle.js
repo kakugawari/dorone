@@ -19,16 +19,13 @@ const css = read('styles.css');
 const js = ['core.js', 'sound.js', 'tasks.js', 'app.js'].map(read).join('\n');
 
 // アイコンは data URI にする。1 枚で完結させるため。
-const svg = read('icon.svg');
-const svgURI = 'data:image/svg+xml;base64,' + Buffer.from(svg, 'utf8').toString('base64');
 const pngURI = 'data:image/png;base64,' + fs.readFileSync(path.join(ROOT, 'apple-touch-icon.png')).toString('base64');
 
 html = html
   .replace('<link rel="stylesheet" href="./styles.css">', '<style>\n' + css + '\n</style>')
   .replace(/<script src="\.\/(core|sound|tasks)\.js"><\/script>\s*/g, '')
   .replace('<script src="./app.js"></script>', '<script>\n' + js + '\n</script>')
-  .replace('href="./icon.svg"', 'href="' + svgURI + '"')
-  .replace('href="./apple-touch-icon.png"', 'href="' + pngURI + '"')
+  .replace(/href="\.\/apple-touch-icon\.png"/g, 'href="' + pngURI + '"')
   // マニフェストは別ファイルなので、1 枚版では外す
   .replace(/<link rel="manifest"[^>]*>\s*/, '');
 
