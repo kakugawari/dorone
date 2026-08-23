@@ -363,3 +363,68 @@ test('墜落したら、その理由がそのまま結果に出る', () => {
   assert.ok(r.run.message.length > 0, '理由が空');
   assert.strictEqual(r.run.message, r.state.crashReason);
 });
+
+// ------------------------------------------------------------------
+// 機体のカラーリング (見た目だけ)
+// ------------------------------------------------------------------
+
+test('集めきると、いちばん上の色にちょうど届く', () => {
+  const last = T.SKINS[T.SKINS.length - 1];
+  assert.strictEqual(last.need, T.maxStars(), '手が届かない色がある');
+  // 星がつく課題は 3 つずつ。「自由に飛ぶ」は採点しないので数に入らない
+  assert.strictEqual(T.maxStars(), T.TASKS.filter(t => t.kind !== 'free').length * 3);
+});
+
+test('色の解放は、少ない星の順に並んでいる', () => {
+  assert.strictEqual(T.SKINS[0].need, 0, '最初から使える色がない');
+  for (let i = 1; i < T.SKINS.length; i++) {
+    assert.ok(T.SKINS[i].need > T.SKINS[i - 1].need,
+      T.SKINS[i].id + ' の順番がおかしい');
+  }
+});
+
+test('色の中身がそろっている (id は重複しない)', () => {
+  const seen = new Set();
+  for (const s of T.SKINS) {
+    assert.ok(!seen.has(s.id), 'id が重複: ' + s.id);
+    seen.add(s.id);
+    assert.ok(s.name.length > 0, s.id + ' に名前がない');
+    for (const key of ['body', 'arm', 'lens']) {
+      assert.match(s[key], /^#[0-9a-f]{6}$/, s.id + ' の ' + key + ' が 6 桁の色でない');
+    }
+  }
+});
+
+test('星を数える。自由に飛ぶは入らないし、上限も超えない', () => {
+  assert.strictEqual(T.countStars(null), 0);
+  assert.strictEqual(T.countStars({}), 0);
+  assert.strictEqual(T.countStars({ hover: 3, altitude: 2 }), 5);
+  assert.strictEqual(T.countStars({ free: 3, hover: 1 }), 1, '自由に飛ぶが数に入っている');
+  assert.strictEqual(T.countStars({ hover: 99 }), 3, '1 課題で 3 個を超えている');
+  assert.strictEqual(T.countStars({ hover: -5 }), 0);
+  assert.strictEqual(T.countStars({ nosuchtask: 3 }), 0, '知らない課題を数えている');
+
+  // 全課題を 3 つ星にすると、ちょうど上限
+  const all = {};
+  T.TASKS.forEach(t => { all[t.id] = 3; });
+  assert.strictEqual(T.countStars(all), T.maxStars());
+});
+
+test('持っていない色を選んでも、既定の色に落ちる', () => {
+  const gold = T.SKINS[T.SKINS.length - 1];
+  assert.strictEqual(T.pickSkin(gold.id, 0).id, 'default', '星 0 でゴールドが使えてしまう');
+  assert.strictEqual(T.pickSkin(gold.id, gold.need - 1).id, 'default', '1 つ足りないのに使える');
+  assert.strictEqual(T.pickSkin(gold.id, gold.need).id, gold.id, 'ちょうど足りても使えない');
+  assert.strictEqual(T.pickSkin('nosuchskin', 99).id, 'default', '知らない色で落ちる');
+  assert.strictEqual(T.pickSkin(undefined, 99).id, 'default');
+});
+
+test('新しく解放された色だけを返す', () => {
+  const sky = T.findSkin('sky');
+  assert.deepStrictEqual(T.newlyUnlocked(0, 0).map(s => s.id), [], '増えていないのに解放される');
+  assert.deepStrictEqual(T.newlyUnlocked(sky.need - 1, sky.need).map(s => s.id), ['sky']);
+  // またいだぶんは全部返る。既に持っていたものは返らない
+  const many = T.newlyUnlocked(0, T.maxStars()).map(s => s.id);
+  assert.strictEqual(many.length, T.SKINS.length - 1, '最初から使える色まで「新しい」になっている');
+  assert.ok(!many.includes('default'));
+});

@@ -158,6 +158,64 @@
     return TASKS.find(t => t.id === id) || TASKS[0];
   }
 
+  // ------------------------------------------------------------------
+  // 機体のカラーリング
+  //
+  // **見た目だけ。飛び方も当たり判定も一切変わらない。**
+  // 課題で集めた星の数で解放する。
+  //
+  // 1 つの色が持つのは「胴体の横の面」と「腕」の 2 色だけ。
+  // 上下・前後の面はそこから明るさをずらして作る (app.js の BODY_SHADE)。
+  // 面ごとに色を持たせると、色を足すたびに 6 色ぶん決めることになって続かない。
+  //
+  // 航法灯 (前が白・後ろが赤) はここに入れない。実機の決まりであって、
+  // 好みで変えるものではないため。
+  // ------------------------------------------------------------------
+  const SKINS = [
+    { id: 'default', name: 'ノーマル', need: 0, body: '#232833', arm: '#20242e', lens: '#5b7fa8' },
+    { id: 'sky', name: 'そらいろ', need: 3, body: '#27598f', arm: '#1d3f66', lens: '#bfe2ff' },
+    { id: 'lime', name: 'ライム', need: 6, body: '#4a7d24', arm: '#31531a', lens: '#dcffb8' },
+    { id: 'orange', name: 'オレンジ', need: 10, body: '#a05a18', arm: '#6d3c10', lens: '#ffe0b0' },
+    // 赤い機体は、後ろの赤い航法灯といちばん近い色になる。灯りが沈まないよう
+    // 胴体は暗めにして、明るさの差を残す (受け皿と合わせて、これで読める)
+    { id: 'cherry', name: 'チェリー', need: 14, body: '#7c1f2e', arm: '#571320', lens: '#ffc9d0' },
+    { id: 'violet', name: 'すみれ', need: 18, body: '#5b3a96', arm: '#3d2666', lens: '#e0ccff' },
+    { id: 'snow', name: 'スノー', need: 22, body: '#8f96a3', arm: '#5f6672', lens: '#dff0ff' },
+    { id: 'gold', name: 'ゴールド', need: 27, body: '#9a7c2e', arm: '#6b5312', lens: '#fff2c0' }
+  ];
+
+  /** 星がつく課題。「自由に飛ぶ」は採点しないので数に入らない。 */
+  function scoredTasks() { return TASKS.filter(t => t.kind !== 'free'); }
+
+  /** 集めきったときの星の数。 */
+  function maxStars() { return scoredTasks().length * 3; }
+
+  /** いま持っている星の数。progress は { 課題の id: 星の数 }。 */
+  function countStars(progress) {
+    if (!progress) return 0;
+    return scoredTasks().reduce(function (n, t) {
+      return n + clamp(Math.floor(progress[t.id] || 0), 0, 3);
+    }, 0);
+  }
+
+  function findSkin(id) {
+    return SKINS.find(s => s.id === id) || SKINS[0];
+  }
+
+  /**
+   * 実際に使う色。**まだ解放していない色を渡されたら、既定に落とす。**
+   * 保存が書きかわっていても、必ずここを通せば持っている色だけになる。
+   */
+  function pickSkin(id, stars) {
+    const s = findSkin(id);
+    return (stars || 0) >= s.need ? s : SKINS[0];
+  }
+
+  /** 星が before から after に増えたときに、新しく解放された色。 */
+  function newlyUnlocked(before, after) {
+    return SKINS.filter(s => s.need > before && s.need <= after);
+  }
+
   /**
    * その課題に必要なものを用意する (荷物・猫・風)。
    * アプリとテストで同じものを使うために、ここに置く。
@@ -559,6 +617,12 @@
 
   return {
     TASKS: TASKS,
+    SKINS: SKINS,
+    maxStars: maxStars,
+    countStars: countStars,
+    findSkin: findSkin,
+    pickSkin: pickSkin,
+    newlyUnlocked: newlyUnlocked,
     progressOf: progressOf,
     findTask: findTask,
     prepare: prepare,

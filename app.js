@@ -90,8 +90,9 @@
   // ---------------------------------------------------------------- 状態
   const app = {
     screen: 'menu',
-    settings: loadJSON(SETTINGS_KEY, { mode: 2, difficulty: 1, altHold: 1, assist: 1, battery: 1, sound: 1, night: 0 }),
+    settings: loadJSON(SETTINGS_KEY, { mode: 2, difficulty: 1, altHold: 1, assist: 1, battery: 1, sound: 1, night: 0, skin: 'default' }),
     progress: loadJSON(PROGRESS_KEY, {}),
+    skin: null,          // 機体の色。applySkin() が入れる (見た目だけ)
     battery: 1,
     ghost: null,
     night: false,
@@ -122,8 +123,19 @@
     'replayClose', 'replayStickL', 'replayStickR', 'replayNote', 'batteryNote',
     'knobL', 'knobR', 'labelL', 'labelR', 'resVerdict', 'resStars', 'resMsg',
     'resScores', 'resNotes', 'chartTop', 'chartAlt', 'btnResRetry', 'btnResNext',
-    'btnResMenu', 'setMode', 'setDifficulty', 'setAltHold', 'setAssist', 'modeNote', 'altHoldNote'
+    'btnResMenu', 'setMode', 'setDifficulty', 'setAltHold', 'setAssist', 'modeNote', 'altHoldNote',
+    'skinList', 'skinStars', 'resUnlock'
   ].forEach(function (id) { els[id] = document.getElementById(id); });
+
+  /**
+   * いま使う機体の色を決める。**持っていない色は既定に落ちる** (pickSkin)。
+   * 毎フレーム数えなおすと無駄なので、星か選択が変わったときだけ呼ぶ。
+   */
+  function applySkin() {
+    app.skin = T.pickSkin(app.settings.skin, T.countStars(app.progress));
+    return app.skin;
+  }
+  applySkin();
 
   const ctx = els.view.getContext('2d');
   const S = window.Sound;
@@ -417,7 +429,15 @@
     if (run !== app.run || !run.finished || !run.score) return;   // すでに次の走行が始まっている
     app.paused = true;
     const best = app.progress[run.task.id] || 0;
-    if (run.stars > best) { app.progress[run.task.id] = run.stars; saveSoon(); }
+    if (run.stars > best) {
+      const before = T.countStars(app.progress);
+      app.progress[run.task.id] = run.stars;
+      // 解放された色は**その走行に結びつけて覚える**。結果画面は遅れて出ることが
+      // あるので、出すときに数えなおすと、次の走行のぶんまで拾ってしまう。
+      run.unlocked = T.newlyUnlocked(before, T.countStars(app.progress));
+      applySkin();
+      saveSoon();
+    }
     saveGhost(run.task.id, run);
     showResult(run);
   }
@@ -467,7 +487,7 @@
     els.replay.hidden = name !== 'replay';
     els.hud.hidden = name !== 'flight';
     els.controls.hidden = name !== 'flight';
-    if (name === 'menu') renderTaskList();
+    if (name === 'menu') { renderTaskList(); renderSkinList(); }
   }
 
   function starsHTML(n, total) {
@@ -495,6 +515,61 @@
     });
   }
 
+  /**
+   * 機体の色えらび。**見た目だけ。** 星が足りない色は押せない。
+   * 見本は 3D の drawDrone と同じ倍率 (BODY_SHADE) で作るので、
+   * ここの色と実際に飛ぶ機体の色がずれない。
+   */
+  function renderSkinList() {
+    const stars = T.countStars(app.progress);
+    els.skinStars.textContent = '★ ' + stars + ' / ' + T.maxStars();
+    els.skinList.innerHTML = '';
+
+    T.SKINS.forEach(function (sk) {
+      const open = stars >= sk.need;
+      const using = open && app.settings.skin === sk.id;
+
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'skin-item' + (open ? '' : ' locked') + (using ? ' on' : '');
+      btn.dataset.skin = sk.id;
+      btn.disabled = !open;
+      btn.setAttribute('aria-pressed', using ? 'true' : 'false');
+
+      const chip = document.createElement('span');
+      chip.className = 'skin-chip';
+      chip.style.setProperty('--top', shadeColor(sk.body, BODY_SHADE.top));
+      chip.style.setProperty('--side', shadeColor(sk.body, BODY_SHADE.side));
+      chip.style.setProperty('--bottom', shadeColor(sk.body, BODY_SHADE.bottom));
+      chip.style.setProperty('--arm', shadeColor(sk.arm, ARM_LIGHT));
+
+      const name = document.createElement('span');
+      name.className = 'skin-name';
+      name.textContent = sk.name;
+
+      const tag = document.createElement('span');
+      tag.className = 'skin-tag';
+      tag.textContent = open ? (using ? '使用中' : '') : '★' + sk.need;
+
+      btn.appendChild(chip);
+      btn.appendChild(name);
+      btn.appendChild(tag);
+      btn.addEventListener('click', function () { chooseSkin(sk.id); });
+
+      const li = document.createElement('li');
+      li.appendChild(btn);
+      els.skinList.appendChild(li);
+    });
+  }
+
+  function chooseSkin(id) {
+    if (T.countStars(app.progress) < T.findSkin(id).need) return;   // 押せないはずだが、念のため
+    app.settings.skin = id;
+    applySkin();
+    saveSoon();
+    renderSkinList();
+  }
+
   // ================================================================
   // 結果
   // ================================================================
@@ -505,6 +580,12 @@
     els.resMsg.textContent = run.success
       ? run.task.name + ' を ' + run.elapsed.toFixed(1) + ' 秒で'
       : (run.message || '');
+
+    const opened = run.unlocked || [];
+    els.resUnlock.hidden = opened.length === 0;
+    els.resUnlock.textContent = opened.length
+      ? '🎨 機体の色が増えました — ' + opened.map(function (s) { return s.name; }).join('・')
+      : '';
 
     const rows = [
       ['正確さ', run.score.accuracy, '平均のズレ ' + run.score.avgError.toFixed(2) + ' m'],
@@ -756,6 +837,15 @@
       skyTop: '#04060e', skyHorizon: '#0a1020', ground: '#0b1019', edge: 'rgba(150,180,240,.14)'
     }
   };
+
+  /**
+   * 機体の面ごとの明るさ。カラーリング (Tasks.SKINS) が持つのは
+   * 「横の面」の 1 色だけで、残りの面はこの倍率でずらして作る。
+   * 上を明るく・下を暗くすると、単色でも箱の向きが読める。
+   */
+  const BODY_SHADE = { bottom: 0.58, front: 1.24, rear: 0.80, side: 1.00, top: 1.58 };
+  const ARM_LIGHT = 1.80;   // 腕のハイライト (根もとの色に対して)
+  const HUB_SHADE = 1.30;   // モーターの頭
 
   /** 'r,g,b' + 濃さ → rgba(...)。色は必ずパレットから引く。 */
   function rgba(rgb, a) { return 'rgba(' + rgb + ',' + a + ')'; }
@@ -1329,8 +1419,9 @@
       const b = bw(state, m.x, -0.004, m.z);
       return [{ x: a.x, y: a.y, z: a.z }, { x: b.x, y: b.y, z: b.z }];
     });
+    const sk = app.skin || T.SKINS[0];
     const armDark = pal().glow ? 0.4 : 1;
-    for (const pass of [[shadeColor('#20242e', armDark), 5], [shadeColor('#3a4152', armDark), 2.5]]) {
+    for (const pass of [[shadeColor(sk.arm, armDark), 5], [shadeColor(sk.arm, ARM_LIGHT * armDark), 2.5]]) {
       beginLines();
       arms.forEach(function (a) { addLine(cam, a[0], a[1]); });
       strokeLines(pass[0], pass[1]);
@@ -1343,16 +1434,16 @@
     ].map(function (c) { const p = bw(state, c[0], c[1], c[2]); return { x: p.x, y: p.y, z: p.z }; });
 
     const bodyFaces = [
-      { i: [4, 5, 6, 7], c: '#14171f' },  // 下
-      { i: [0, 1, 5, 4], c: '#2b3140' },  // 前
-      { i: [3, 2, 6, 7], c: '#1c2029' },  // 後
-      { i: [1, 2, 6, 5], c: '#232833' },  // 右
-      { i: [0, 3, 7, 4], c: '#232833' },  // 左
-      { i: [0, 1, 2, 3], c: '#39404f' }   // 上
+      { i: [4, 5, 6, 7], k: BODY_SHADE.bottom },  // 下
+      { i: [0, 1, 5, 4], k: BODY_SHADE.front },   // 前
+      { i: [3, 2, 6, 7], k: BODY_SHADE.rear },    // 後
+      { i: [1, 2, 6, 5], k: BODY_SHADE.side },    // 右
+      { i: [0, 3, 7, 4], k: BODY_SHADE.side },    // 左
+      { i: [0, 1, 2, 3], k: BODY_SHADE.top }      // 上
     ];
     const nightK = pal().glow ? 0.42 : 1;
     bodyFaces.forEach(function (f) {
-      poly(cam, f.i.map(function (i) { return corners[i]; }), shadeColor(f.c, nightK), 'rgba(0,0,0,.4)', 1);
+      poly(cam, f.i.map(function (i) { return corners[i]; }), shadeColor(sk.body, f.k * nightK), 'rgba(0,0,0,.4)', 1);
     });
 
     // 航法灯。**前が白、後ろが赤。** 実機と同じ決まりで、暗いところでは
@@ -1370,16 +1461,22 @@
     const frontVis = clamp((toward + 0.30) / 0.85, 0, 1);
     const rearVis = clamp((-toward + 0.30) / 0.85, 0, 1);
 
+    // 灯りは必ず**暗い受け皿の上に**置く。濃い色の機体 (赤・白) だと、
+    // 灯りが胴体に溶けて前後が読めなくなる。実機の灯りも黒い台座に付いている。
+    const LED_CASE = 'rgba(7,9,13,';
     function ledStrip(zSign, rgb, vis) {
       if (vis < 0.03) return;
       const z = bodyL * 1.02 * zSign;
-      const pts = [
-        bw(state, -bodyW * 0.8, bodyH * 0.15, z),
-        bw(state, bodyW * 0.8, bodyH * 0.15, z),
-        bw(state, bodyW * 0.8, -bodyH * 0.5, z),
-        bw(state, -bodyW * 0.8, -bodyH * 0.5, z)
-      ].map(function (p) { return { x: p.x, y: p.y, z: p.z }; });
-      poly(cam, pts, 'rgba(' + rgb + ',' + vis.toFixed(3) + ')');
+      const quad = function (sx, top, bot) {
+        return [
+          bw(state, -bodyW * sx, bodyH * top, z),
+          bw(state, bodyW * sx, bodyH * top, z),
+          bw(state, bodyW * sx, bodyH * bot, z),
+          bw(state, -bodyW * sx, bodyH * bot, z)
+        ].map(function (p) { return { x: p.x, y: p.y, z: p.z }; });
+      };
+      poly(cam, quad(0.95, 0.45, -0.82), LED_CASE + (0.92 * vis).toFixed(3) + ')');
+      poly(cam, quad(0.8, 0.15, -0.5), 'rgba(' + rgb + ',' + vis.toFixed(3) + ')');
     }
     ledStrip(1, '223,242,255', frontVis);
     ledStrip(-1, '255,77,85', rearVis);
@@ -1392,14 +1489,24 @@
         vis: m.front ? frontVis : rearVis
       };
     });
-    lamps.forEach(function (l) {
-      if (l.vis < 0.05) return;
-      const s = C.projectPoint(cam, l.p);
-      if (!s) return;
-      const f = C.focalLength(cam) / s.z;
-      ctx.fillStyle = 'rgba(' + l.rgb + ',' + l.vis.toFixed(3) + ')';
-      ctx.beginPath(); ctx.arc(s.x * dpr, s.y * dpr, Math.max(1, 0.013 * f) * dpr, 0, Math.PI * 2); ctx.fill();
-    });
+    /**
+     * 角の灯りは**いちばん最後に描く。** モーターの頭のほうが大きいので、
+     * 先に描くと上から塗りつぶされて消える (明るい色の機体で気づいた)。
+     * 向きを読む手がかりは、機体の部品で隠してはいけない。
+     */
+    function drawLamps() {
+      lamps.forEach(function (l) {
+        if (l.vis < 0.05) return;
+        const s = C.projectPoint(cam, l.p);
+        if (!s) return;
+        const f = C.focalLength(cam) / s.z;
+        // こちらも受け皿を敷いてから灯す
+        ctx.fillStyle = LED_CASE + (0.9 * l.vis).toFixed(3) + ')';
+        ctx.beginPath(); ctx.arc(s.x * dpr, s.y * dpr, Math.max(1.7, 0.020 * f) * dpr, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = 'rgba(' + l.rgb + ',' + l.vis.toFixed(3) + ')';
+        ctx.beginPath(); ctx.arc(s.x * dpr, s.y * dpr, Math.max(1, 0.013 * f) * dpr, 0, Math.PI * 2); ctx.fill();
+      });
+    }
 
     // 暗いところでは、灯りのまわりがにじむ
     if (pal().glow) {
@@ -1427,9 +1534,11 @@
     const cs = C.projectPoint(cam, cm);
     if (cs) {
       const f = C.focalLength(cam) / cs.z;
-      ctx.fillStyle = '#0c0e14';
+      ctx.fillStyle = shadeColor(sk.arm, 0.4 * nightK);
       ctx.beginPath(); ctx.arc(cs.x * dpr, cs.y * dpr, Math.max(1.4, 0.022 * f) * dpr, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#5b7fa8';
+      // レンズは光っていない。夜は胴体と同じだけ暗くする。
+      // 明るいままだと、航法灯でもないのに 3 つめの灯りに見える。
+      ctx.fillStyle = shadeColor(sk.lens, nightK);
       ctx.beginPath(); ctx.arc(cs.x * dpr, cs.y * dpr, Math.max(0.7, 0.011 * f) * dpr, 0, Math.PI * 2); ctx.fill();
     }
 
@@ -1462,10 +1571,12 @@
       const hs = C.projectPoint(cam, { x: hub.x, y: hub.y, z: hub.z });
       if (hs) {
         const f = C.focalLength(cam) / hs.z;
-        ctx.fillStyle = '#2a3040';
+        ctx.fillStyle = shadeColor(sk.arm, HUB_SHADE * nightK);
         ctx.beginPath(); ctx.arc(hs.x * dpr, hs.y * dpr, Math.max(1.2, 0.016 * f) * dpr, 0, Math.PI * 2); ctx.fill();
       }
     });
+
+    drawLamps();   // モーターの頭より後。航法灯を隠さない
 
     // 高さの補助線。実機では影で読むが、画面では見えにくいので線も出す。
     if (app.settings.assist) {
@@ -2036,6 +2147,11 @@
       setBattery: function (v) { app.battery = v; if (app.state) app.state.battery = v; },
       isNight: function () { return app.night; },
       applyNight: applyNight,
+      skin: function () { return app.skin; },
+      chooseSkin: chooseSkin,
+      applySkin: applySkin,
+      finishFlight: finishFlight,
+      setProgress: function (p) { app.progress = p; applySkin(); renderTaskList(); renderSkinList(); },
       movePilot: movePilot,
       resetPilot: resetPilot,
       pilotMoved: pilotMoved,

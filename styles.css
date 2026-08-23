@@ -459,6 +459,52 @@ body {
 .ti-stars .on { color: var(--warn); }
 .ti-stars .off { color: #39415e; }
 
+/* ---- 機体の色 (見た目だけ。星で解放する) ---- */
+.star-count { color: var(--warn); font-weight: 700; letter-spacing: .04em; margin-left: 6px; }
+.skin-note { margin: -4px 0 10px; font-size: 11.5px; color: var(--ink-dim); line-height: 1.6; }
+.skin-note b { color: var(--ink); font-weight: 600; }
+
+.skin-list {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px;
+}
+.skin-item {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; text-align: left;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 9px 10px;
+  color: var(--ink);
+  font: inherit;
+}
+.skin-item:active { background: var(--panel-2); }
+.skin-item.on { border-color: var(--accent); background: var(--panel-2); }
+.skin-item.locked { opacity: .45; }
+
+/* 見本。上・横・下の 3 色で「箱を斜めから見た」感じにして、腕の色でふちどる。 */
+.skin-chip {
+  flex: 0 0 auto;
+  width: 26px; height: 26px;
+  border-radius: 8px;
+  border: 2px solid var(--arm);
+  background: linear-gradient(150deg, var(--top) 0%, var(--side) 52%, var(--bottom) 100%);
+}
+/* 未解放でも色は見せる。灰色にすると「スノー」と「ゴールド」が同じ絵になり、
+   何を目指しているのか分からなくなる */
+.skin-item.locked .skin-chip { filter: saturate(.7) brightness(.85); }
+.skin-name { flex: 1 1 auto; min-width: 0; font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skin-tag { flex: 0 0 auto; font-size: 10.5px; color: var(--ink-dim); }
+.skin-item.locked .skin-tag { color: var(--warn); }
+.skin-item.on .skin-tag { color: var(--accent); }
+
+.result-unlock {
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: var(--accent-2);
+  font-weight: 600;
+}
+
 .settings { display: flex; flex-direction: column; gap: 16px; }
 .setting-label { display: block; font-size: 12.5px; font-weight: 700; margin-bottom: 7px; }
 .seg { display: flex; gap: 6px; flex-wrap: wrap; }

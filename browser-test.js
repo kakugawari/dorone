@@ -1364,6 +1364,304 @@ async function screenHash(page) {
     ok((await canvasStats(page)).distinct > 12, 'ゴーストを出すと絵が壊れる');
   });
 
+  console.log('\n■ 機体の色 (見た目だけ)');
+
+  /** 星を決め打ちして、メニューを開きなおす。 */
+  async function setStars(page, per) {
+    return page.evaluate((n) => {
+      const p = {};
+      window.Tasks.TASKS.forEach(t => { if (t.kind !== 'free') p[t.id] = n; });
+      window.__app.setProgress(p);
+      window.__app.setScreen('menu');
+      return window.Tasks.countStars(p);
+    }, per);
+  }
+
+  await t('星の数だけ色が解放され、足りないものは押せない', async () => {
+    const stars = await setStars(page, 1);          // 9 課題 x 1 = 9 個
+    ok(stars === 9, '星の数が合わない (' + stars + ')');
+    ok((await page.locator('#skinStars').textContent()).includes('9 / 27'),
+      '集めた星の数が出ていない');
+
+    const items = await page.locator('#skinList .skin-item').count();
+    ok(items === 8, '色の数が合わない (' + items + ')');
+    // 0/3/6 の 3 つが開いて、10 以上の 5 つは閉じたまま
+    const open = await page.locator('#skinList .skin-item:not(.locked)').count();
+    const locked = await page.locator('#skinList .skin-item.locked').count();
+    console.log('       星 9 個 → 解放 ' + open + ' / 未解放 ' + locked);
+    ok(open === 3, '解放された色の数が合わない (' + open + ')');
+    ok(locked === 5, '未解放の色の数が合わない (' + locked + ')');
+    ok(await page.locator('#skinList .skin-item[data-skin="gold"]').isDisabled(),
+      '星が足りない色が押せてしまう');
+    ok((await page.locator('.skin-item[data-skin="gold"] .skin-tag').textContent()).includes('27'),
+      'あと何個いるのかが出ていない');
+  });
+
+  await t('解放された色は選べて、選んだ色が残る', async () => {
+    await page.locator('#skinList .skin-item[data-skin="lime"]').tap();
+    await page.waitForTimeout(120);
+    ok(await page.evaluate(() => window.__app.skin().id) === 'lime', '選んだ色になっていない');
+    ok(await page.locator('.skin-item[data-skin="lime"].on').count() === 1, '選んだ印が付かない');
+    ok((await page.locator('.skin-item[data-skin="lime"] .skin-tag').textContent()).includes('使用中'),
+      '「使用中」が出ていない');
+    // 課題を始めても残る
+    await page.evaluate(() => window.__app.startTask('hover'));
+    await page.waitForTimeout(200);
+    ok(await page.evaluate(() => window.__app.skin().id) === 'lime', '課題を始めたら色が戻った');
+  });
+
+  await t('持っていない色を無理やり指定しても、既定に落ちる', async () => {
+    const r = await page.evaluate(() => {
+      // 保存が書きかわっていた状態を作り、読みこみ直後と同じ道 (applySkin) を通す
+      window.__app.app.settings.skin = 'gold';       // 星 9 個ではまだ届かない
+      const loaded = window.__app.applySkin().id;
+      // 押せないはずのものを押しても、選ばれない
+      window.__app.chooseSkin('gold');
+      return { loaded: loaded, saved: window.__app.app.settings.skin, now: window.__app.skin().id };
+    });
+    ok(r.loaded === 'default', '持っていない色が使えてしまう (' + r.loaded + ')');
+    ok(r.saved !== 'gold' || r.now === 'default', '持っていない色が選ばれた (' + r.now + ')');
+    await page.evaluate(() => window.__app.chooseSkin('lime'));
+  });
+
+  await t('えらんだ色が、画面の機体に本当に出ている', async () => {
+    // 「設定を変えた」だけでは色が出ている証拠にならない。実際の画素を測る。
+    const res = await page.evaluate(() => {
+      const app = window.__app.app;
+      const all = {};
+      window.Tasks.TASKS.forEach(t => { all[t.id] = 3; });   // 全部の色を解放する
+      window.__app.setProgress(all);
+      app.settings.night = 0;
+      window.__app.startTask('hover');
+
+      function shoot(id) {
+        window.__app.chooseSkin(id);
+        // 走るたびに数字が変わらないように、機体を決まった場所に置き、
+        // 羽根の位置も解像度も止める。輪の明滅も止める (inZone = false)。
+        app.state.pos = { x: 0, y: 1.35, z: 0.7 };
+        app.state.vel = { x: 0, y: 0, z: 0 };
+        app.state.yaw = 0; app.state.spin = 0; app.state.throttleVis = 0;
+        app.state.flying = true;
+        app.run.inZone = false;
+        window.__app.setRenderScale(2);
+        for (let i = 0; i < 6; i++) window.__app.updateCam(3);
+        window.__app.bench.drawScene();
+        const cv = document.getElementById('view');
+        return cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+      }
+
+      const base = new Uint8ClampedArray(shoot('default'));
+      const out = {};
+      for (const sk of window.Tasks.SKINS) {
+        if (sk.id === 'default') continue;
+        const d = shoot(sk.id);
+        let n = 0, r = 0, g = 0, b = 0;
+        for (let i = 0; i < d.length; i += 4) {
+          // 既定の色と違うところ = 塗り分けた機体そのもの
+          if (Math.abs(d[i] - base[i]) + Math.abs(d[i + 1] - base[i + 1])
+            + Math.abs(d[i + 2] - base[i + 2]) < 12) continue;
+          n++; r += d[i]; g += d[i + 1]; b += d[i + 2];
+        }
+        out[sk.id] = { n: n, r: r / n, g: g / n, b: b / n };
+      }
+      return out;
+    });
+
+    for (const id of Object.keys(res)) {
+      const c = res[id];
+      console.log('       ' + id.padEnd(8) + ' 変わった画素 ' + String(c.n).padStart(5)
+        + '  rgb(' + c.r.toFixed(0) + ',' + c.g.toFixed(0) + ',' + c.b.toFixed(0) + ')');
+      ok(c.n > 400, id + ' に変えても機体の色が変わっていない (' + c.n + ' 画素)');
+    }
+    // 色の向きも見る。青い機体が赤くなっていたら、どこかで取りちがえている
+    ok(res.sky.b > res.sky.r + 25, 'そらいろが青くない');
+    ok(res.lime.g > res.lime.r + 20 && res.lime.g > res.lime.b + 40, 'ライムが緑でない');
+    ok(res.cherry.r > res.cherry.g + 40 && res.cherry.r > res.cherry.b + 30, 'チェリーが赤くない');
+    ok(res.gold.r > res.gold.b + 45 && res.gold.g > res.gold.b + 30, 'ゴールドが金色でない');
+    ok(res.violet.b > res.violet.g + 25, 'すみれが紫でない');
+  });
+
+  await t('暗い部屋でも、色の違いは残る (LED は色えらびで変わらない)', async () => {
+    const res = await page.evaluate(() => {
+      const app = window.__app.app;
+      app.settings.night = 1;
+      window.__app.startTask('hover');
+      window.__app.applyNight();
+
+      function shoot(id) {
+        window.__app.chooseSkin(id);
+        app.state.pos = { x: 0, y: 1.35, z: 0.7 };
+        app.state.vel = { x: 0, y: 0, z: 0 };
+        app.state.yaw = 0; app.state.spin = 0; app.state.throttleVis = 0;
+        app.state.flying = true;
+        app.run.inZone = false;
+        window.__app.setRenderScale(2);
+        for (let i = 0; i < 6; i++) window.__app.updateCam(3);
+        window.__app.bench.drawScene();
+        const cv = document.getElementById('view');
+        const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+        // 航法灯 (前が白・後ろが赤) は実機の決まり。色えらびで変えてはいけない
+        let white = 0, red = 0;
+        for (let i = 0; i < d.length; i += 4) {
+          const r = d[i], g = d[i + 1], b = d[i + 2];
+          if (r > 190 && g > 200 && b > 210) white++;
+          if (r > 130 && r > g + 60 && r > b + 60) red++;
+        }
+        return { data: new Uint8ClampedArray(d), white: white, red: red };
+      }
+
+      // 青い機体で測る。赤い機体だと、胴体そのものが「赤い灯り」に数えられてしまう
+      const a = shoot('default'), b = shoot('sky');
+      let n = 0;
+      for (let i = 0; i < a.data.length; i += 4) {
+        if (Math.abs(a.data[i] - b.data[i]) + Math.abs(a.data[i + 1] - b.data[i + 1])
+          + Math.abs(a.data[i + 2] - b.data[i + 2]) >= 12) n++;
+      }
+      app.settings.night = 0;
+      window.__app.applyNight();
+      return { changed: n, whiteA: a.white, whiteB: b.white, redA: a.red, redB: b.red };
+    });
+    console.log('       夜に変わった画素 ' + res.changed
+      + ' / 白い灯り ' + res.whiteA + '→' + res.whiteB
+      + ' / 赤い灯り ' + res.redA + '→' + res.redB);
+    ok(res.changed > 120, '夜だと色の違いが消える (' + res.changed + ' 画素)');
+    // 灯りの数は動かないこと。レンズを明るいままにすると、ここが増えて
+    // 「3 つめの灯り」ができてしまう (実際に一度そうなった)
+    ok(Math.abs(res.whiteA - res.whiteB) <= Math.max(6, res.whiteA * 0.03),
+      '色をかえたら航法灯の白まで変わった (' + res.whiteA + ' → ' + res.whiteB + ')');
+    ok(Math.abs(res.redA - res.redB) <= Math.max(6, res.redA * 0.03),
+      '色をかえたら航法灯の赤まで変わった (' + res.redA + ' → ' + res.redB + ')');
+  });
+
+  await t('どの色でも、後ろの赤い航法灯が胴体に沈まない', async () => {
+    // 赤や白の機体だと、灯りが胴体と同じ色になって前後が読めなくなる。
+    // 灯りのまわりだけを切り取って、「暗い受け皿の中で光っているか」を測る。
+    const res = await page.evaluate(() => {
+      const app = window.__app.app;
+      const out = {};
+      const all = {};
+      window.Tasks.TASKS.forEach(t => { all[t.id] = 3; });
+      window.__app.setProgress(all);
+      app.settings.night = 0;
+      window.__app.startTask('hover');
+
+      for (const sk of window.Tasks.SKINS) {
+        window.__app.chooseSkin(sk.id);
+        // yaw = 0 で機首は部屋の奥。操縦者からは**後ろ (赤)** が見える
+        const pos = { x: 0, y: 1.30, z: 0.90 };
+        app.state.pos = { x: pos.x, y: pos.y, z: pos.z };
+        app.state.vel = { x: 0, y: 0, z: 0 };
+        app.state.yaw = 0; app.state.spin = 0; app.state.throttleVis = 0;
+        app.state.flying = true;
+        app.run.inZone = false;
+        window.__app.setRenderScale(2);
+        for (let i = 0; i < 6; i++) window.__app.updateCam(3);
+        window.__app.bench.drawScene();
+
+        const cv = document.getElementById('view');
+        const k = window.__app.renderScale();
+        // 後ろの灯りの位置 (drawDrone の bodyL * 1.02 と同じ)
+        const s = window.Core.projectPoint(app.cam, { x: pos.x, y: pos.y, z: pos.z - 0.0867 });
+        const R = Math.round(9 * k);
+        const d = cv.getContext('2d')
+          .getImageData(Math.round(s.x * k) - R, Math.round(s.y * k) - R, R * 2, R * 2).data;
+
+        let lamp = 0, dark = 0;
+        for (let i = 0; i < d.length; i += 4) {
+          const r = d[i], g = d[i + 1], b = d[i + 2];
+          if (r > 190 && r > g + 70 && r > b + 70) lamp++;      // 灯りそのもの
+          if ((r + g + b) / 3 < 25) dark++;                     // 受け皿
+        }
+        out[sk.id] = { lamp: lamp, dark: dark };
+      }
+      return out;
+    });
+
+    // 受け皿を外して測ると、明るい機体 (そらいろ・すみれ・スノー・ゴールド) は
+    // 暗い画素が **0** になる。100 を割ったら、灯りが胴体に溶けていると見てよい。
+    for (const id of Object.keys(res)) {
+      const c = res[id];
+      console.log('       ' + id.padEnd(8) + ' 灯り ' + String(c.lamp).padStart(4)
+        + ' 画素 / まわりの暗い画素 ' + String(c.dark).padStart(4));
+      ok(c.lamp > 60, id + ' で赤い航法灯が見えない (' + c.lamp + ' 画素)');
+      ok(c.dark > 100, id + ' で灯りが胴体に沈んでいる (受け皿 ' + c.dark + ' 画素)');
+    }
+  });
+
+  await t('モーターの頭が、根もとの航法灯を隠さない', async () => {
+    // モーターの頭のほうが灯りより大きい。先に灯りを描くと塗りつぶされる。
+    // 暗い頭だと気づかないが、明るい色の機体にすると一目で分かった。
+    const res = await page.evaluate(() => {
+      const app = window.__app.app;
+      app.settings.night = 0;
+      window.__app.chooseSkin('default');
+      window.__app.startTask('hover');
+      const pos = { x: 0, y: 1.30, z: 0.90 };
+      app.state.pos = { x: pos.x, y: pos.y, z: pos.z };
+      app.state.vel = { x: 0, y: 0, z: 0 };
+      app.state.yaw = 0; app.state.spin = 0; app.state.throttleVis = 0;
+      app.state.flying = true;
+      app.run.inZone = false;
+      window.__app.setRenderScale(2);
+      for (let i = 0; i < 6; i++) window.__app.updateCam(3);
+      window.__app.bench.drawScene();
+
+      const cv = document.getElementById('view');
+      const k = window.__app.renderScale();
+      // 後ろ側 2 つのモーターの根もと (drawDrone の armR = 0.135、高さ 0.016)
+      const out = [];
+      for (const sx of [-0.135, 0.135]) {
+        const s = window.Core.projectPoint(app.cam,
+          { x: pos.x + sx, y: pos.y + 0.016, z: pos.z - 0.135 });
+        const R = Math.round(4 * k);
+        const d = cv.getContext('2d')
+          .getImageData(Math.round(s.x * k) - R, Math.round(s.y * k) - R, R * 2, R * 2).data;
+        let red = 0;
+        for (let i = 0; i < d.length; i += 4) {
+          if (d[i] > 190 && d[i] > d[i + 1] + 70 && d[i] > d[i + 2] + 70) red++;
+        }
+        out.push(red);
+      }
+      return out;
+    });
+    console.log('       後ろのモーターの灯り ' + res.join(' / ') + ' 画素');
+    res.forEach(function (n) {
+      ok(n > 30, '根もとの灯りがモーターの頭に隠れている (' + n + ' 画素)');
+    });
+  });
+
+  await t('新しい色が解放されると、結果画面が知らせる', async () => {
+    const txt = await page.evaluate(() => {
+      window.__app.setProgress({});                     // 星 0 個からやりなおす
+      const run = window.__app.run();
+      // 「①を 3 つ星」= 星 3 個。そらいろ (★3) がちょうど解放される
+      run.finished = true; run.success = true; run.stars = 3;
+      run.score = { accuracy: 1, smooth: 1, speed: 1, avgError: 0.1, roughness: 0.1 };
+      run.notes = []; run.samples = run.samples || [];
+      window.__app.finishFlight(run);
+      const el = document.getElementById('resUnlock');
+      return { hidden: el.hidden, text: el.textContent, stars: window.Tasks.countStars(window.__app.app.progress) };
+    });
+    console.log('       ' + txt.text);
+    ok(txt.stars === 3, '星が入っていない (' + txt.stars + ')');
+    ok(!txt.hidden, '解放のお知らせが出ていない');
+    ok(txt.text.includes('そらいろ'), '解放された色の名前がない: ' + txt.text);
+  });
+
+  await t('解放がないときは、お知らせを出さない', async () => {
+    const hidden = await page.evaluate(() => {
+      window.__app.startTask('hover');               // 走行ごとに run は作りなおされる
+      const run = window.__app.run();
+      run.finished = true; run.success = true; run.stars = 1;   // すでに 3 つ星なので増えない
+      run.score = { accuracy: 1, smooth: 1, speed: 1, avgError: 0.1, roughness: 0.1 };
+      run.notes = [];
+      window.__app.finishFlight(run);
+      return document.getElementById('resUnlock').hidden;
+    });
+    ok(hidden, '増えていないのにお知らせが出た');
+    await page.evaluate(() => { window.__app.setProgress({}); window.__app.chooseSkin('default'); });
+  });
+
   console.log('\n■ 速さ');
 
   async function measure(label, limitMs) {
